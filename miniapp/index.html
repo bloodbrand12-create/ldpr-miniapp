@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Молодёжка ЛДПР Омск</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"></div>
+
+<!-- Сообщение вместо приложения: загрузка, нет доступа, открыто не из Telegram -->
+<div class="auth" id="gate">
+  <div class="auth-card glass">
+    <img src="logo.svg" alt="Молодёжная организация ЛДПР" class="auth-logo">
+    <h1 class="auth-title" id="gate-title">Загрузка…</h1>
+    <p class="auth-sub" id="gate-text">Подключаемся к данным молодёжки.</p>
+    <button type="button" class="btn primary" id="gate-retry" hidden>Попробовать ещё раз</button>
+  </div>
+</div>
+
+<!-- Приложение -->
+<div class="shell" id="shell" hidden>
+  <nav class="rail glass" aria-label="Разделы">
+    <img class="rail-logo" src="logo.svg" alt="Молодёжная организация ЛДПР">
+    <a class="nav" href="#overview" data-view="overview"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Обзор</span></a>
+    <a class="nav" href="#members" data-view="members"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/></svg><span>Актив</span></a>
+    <a class="nav" href="#social" data-view="social"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-9"/><path d="M15 7h5v5"/></svg><span>Соцсети</span></a>
+    <a class="nav" href="#events" data-view="events"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg><span>Мероприятия</span></a>
+    <a class="nav" href="#roadmap" data-view="roadmap"><svg viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4z"/><path d="M9 4v14M15 6v14"/></svg><span>План</span></a>
+    <hr>
+    <a class="nav" href="#reports" data-view="reports"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>Отчёты</span></a>
+    <a class="nav" href="#users" data-view="users" id="nav-users" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg><span>Доступ</span></a>
+  </nav>
+
+  <main class="main">
+    <header class="top glass">
+      <div>
+        <p class="eyebrow">Молодёжка ЛДПР · Омская область</p>
+        <h1 class="title">Дорожная карта 2026–2027</h1>
+      </div>
+      <div class="now">
+        <div class="now-box">
+          <p class="now-m">Сейчас: <b id="now-month">—</b> · <span id="now-stage">—</span></p>
+          <div class="track" id="now-track"></div>
+        </div>
+        <div class="me"><span class="avatar" id="me-avatar">?</span><span class="me-txt"><b id="me-name">—</b><small id="me-role">—</small></span></div>
+      </div>
+    </header>
+
+    <section class="view" data-view="overview" hidden>
+      <div class="vhead"><h2 class="vtitle">Обзор месяца</h2><button type="button" class="btn primary" id="quick-add" hidden>+ Добавить отчёт</button></div>
+      <p class="lead" id="ov-lead"></p>
+      <div class="tiles" id="ov-tiles"></div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Последние отчёты</h3><a class="link" href="#reports">Все отчёты →</a></div>
+        <ul class="feed" id="ov-feed"></ul>
+      </div>
+    </section>
+
+    <section class="view" data-view="members" hidden>
+      <h2 class="vtitle">Актив</h2>
+      <div class="mini" id="mem-mini"></div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Рост по месяцам</h3><ul class="legend"><li><i class="sw plan"></i>План</li><li><i class="sw fact"></i>Факт</li><li><i class="sw now"></i>Сейчас</li></ul></div>
+        <div class="chart" id="ch-members"></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="social" hidden>
+      <h2 class="vtitle">Соцсети</h2>
+      <div class="mini" id="soc-mini"></div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Подписчики ВК</h3><ul class="legend"><li><i class="sw line"></i>План</li><li><i class="sw fact"></i>Факт</li></ul></div>
+        <div class="chart" id="ch-vk"></div>
+      </div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Посты и Reels</h3><ul class="legend"><li><i class="sw plan"></i>Посты, план</li><li><i class="sw reels"></i>Reels, план</li><li><i class="sw fact"></i>Посты, факт</li></ul></div>
+        <div class="chart" id="ch-content"></div>
+      </div>
+      <div class="card glass">
+        <h3 class="h3">TikTok: цели</h3>
+        <ul class="tt" id="soc-tt"></ul>
+      </div>
+    </section>
+
+    <section class="view" data-view="events" hidden>
+      <h2 class="vtitle">Мероприятия</h2>
+      <div class="mini" id="ev-mini"></div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">По месяцам</h3><ul class="legend"><li><i class="sw plan"></i>План</li><li><i class="sw factbar"></i>Факт</li></ul></div>
+        <div class="chart" id="ch-events"></div>
+      </div>
+    </section>
+
+    <section class="view" data-view="roadmap" hidden>
+      <h2 class="vtitle">План по месяцам</h2>
+      <div class="tablecard glass">
+        <div class="chips" id="rm-chips" role="group" aria-label="Фильтр по фазе"></div>
+        <div class="tablewrap"><table class="table"><thead><tr><th>Месяц</th><th>Этап</th><th>Актив, план</th><th class="num">Актив, факт</th><th class="num">ВК, план</th><th class="num">ВК, факт</th><th class="num">Мероприятия</th><th>Статус</th></tr></thead><tbody id="rm-body"></tbody></table></div>
+        <p class="hint">Нажмите на строку, чтобы увидеть, что делать в этом месяце.</p>
+      </div>
+      <details class="details glass">
+        <summary>Как считается факт и что сверить</summary>
+        <ul>
+          <li>Факт собирается из отчётов: актив — последнее значение «Всего в активе» за месяц (Работа с людьми); подписчики — последнее значение за месяц (Медиа); посты и Reels — сумма за месяц; мероприятия — число отчётов отдела мероприятий.</li>
+          <li>Процент выполнения считается от нижней границы плана.</li>
+          <li>Плана на сентябрь в дорожной карте нет. Август: в соцсетях «до 6000 (ВК)», в KPI — 1450; на графике KPI. Декабрь: план по активу ниже ноябрьского.</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="view" data-view="reports" hidden>
+      <div class="vhead"><h2 class="vtitle">Отчёты</h2><button type="button" class="btn primary" id="rep-add" hidden>+ Добавить отчёт</button></div>
+      <div class="toolbar">
+        <div class="chips" id="rep-tabs" role="tablist" aria-label="Направление"></div>
+        <label class="sel"><span class="sr">Месяц</span><select id="rep-month"></select></label>
+      </div>
+      <div class="sum" id="rep-sum"></div>
+      <div class="tablecard glass">
+        <div class="tablewrap"><table class="table"><thead id="rep-head"></thead><tbody id="rep-body"></tbody></table></div>
+        <p class="empty" id="rep-empty" hidden>Отчётов за этот период пока нет.</p>
+      </div>
+    </section>
+
+    <section class="view" data-view="users" hidden>
+      <h2 class="vtitle">Доступ</h2>
+      <p class="lead">Новый человек пишет боту /start — вам приходит заявка с кнопками ролей. Здесь можно поменять роль или закрыть доступ. Руководитель видит весь дашборд, а вносить отчёты может только своего направления.</p>
+      <div class="tablecard glass">
+        <div class="tablewrap"><table class="table"><thead><tr><th>Имя</th><th>Telegram</th><th>Роль</th></tr></thead><tbody id="users-body"></tbody></table></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog class="dlg glass" id="dlg">
+  <form method="dialog" class="dlg-form" id="dlg-form" novalidate>
+    <h3 class="h3" id="dlg-title"></h3>
+    <div class="dlg-body" id="dlg-body"></div>
+    <p class="err" id="dlg-err" role="alert" hidden></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn" id="dlg-cancel">Отмена</button>
+      <button type="submit" class="btn primary" id="dlg-ok">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

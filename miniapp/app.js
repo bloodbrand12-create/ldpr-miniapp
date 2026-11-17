@@ -39,6 +39,7 @@ const dateLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', {
 const initials = (n) => (n || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 const anyDept = () => S.me && (S.me.role === 'admin' || S.me.role === 'deputy');
 const canWrite = (dept) => S.me && (anyDept() || S.me.role === dept);
+const canSocial = () => S.me && ['media', 'admin', 'deputy'].includes(S.me.role);
 const myDepts = () => (anyDept() ? DEPT_ORDER : DEPT_ORDER.filter((d) => d === S.me.role));
 
 const TG = window.Telegram && window.Telegram.WebApp;
@@ -97,6 +98,8 @@ function computeProgress() {
     vkFrom = Object.keys(vkMonth).sort()[0] || null;
   }
   const thisMonth = new Date().toISOString().slice(0, 7);
+  const ttMonth = {};
+  for (const r of S.social || []) if (r.tt_subs !== undefined) ttMonth[r.t.slice(0, 7)] = r.tt_subs;
   const pct = (f, p) => (f === null || !p ? null : Math.round((f / p) * 100));
   S.progress = S.plan.map((p) => {
     const a = byMonth[p.month] || { has: {} };
@@ -106,7 +109,7 @@ function computeProgress() {
     return { ...p,
       members_fact, members_pct: pct(members_fact, p.members_min),
       vk_fact, vk_pct: pct(vk_fact, p.vk_plan),
-      tiktok_fact: a.tiktok ?? null,
+      tiktok_fact: ttMonth[p.month] ?? a.tiktok ?? null,
       posts_fact: auto ? auto.posts : a.has.media ? a.posts : null, vk_views: auto ? auto.views : null, vk_auto: !!auto, reels_fact: a.has.media ? a.reels : null,
       events_fact: a.has.events ? a.events : null, participants: a.participants || 0,
       new_members: a.has.people ? a.new_members : null };
@@ -126,7 +129,7 @@ async function boot() {
   if (!window.CONFIG || !/^https:\/\//.test(window.CONFIG.API_URL)) return gate('Не настроено', 'В файле config.js не указан адрес Google Apps Script.');
   try {
     const [plan, st] = await Promise.all([fetch('plan.json').then((r) => r.json()), api('state')]);
-    S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || [];
+    S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || []; S.social = st.social || [];
   } catch (e) { return gate('Нет доступа', e.message, true); }
   if (DEPT_ORDER.includes(S.me.role)) S.repDept = S.me.role;
   { const d = new Date(); S.repMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
@@ -216,6 +219,7 @@ function renderSocial() {
   $('#soc-mini').replaceChildren(stat('ВК сейчас по плану', fmt(n.vk_plan)), statFact('ВК, факт', n.vk_fact), stat('ВК к августу', fmt(last.vk_plan)), stat('Reels в этом месяце', n.reels_min === null ? 'без нормы' : range(n.reels_min, n.reels_max)));
   chartVk($('#ch-vk')); chartContent($('#ch-content'));
   renderVkLive();
+  renderSocMan();
   $('#soc-tt').replaceChildren(...S.progress.filter((r) => r.tiktok_target !== null || r.tiktok_fact !== null).map((r) =>
     h('li', null, h('span', { class: 'm' }, r.month_label), h('span', { class: 'v' }, fmt(r.tiktok_target)),
       h('span', { class: 'f' + (r.tiktok_fact !== null ? ' has' : '') }, r.tiktok_fact === null ? 'факт не внесён' : 'факт: ' + fmt(r.tiktok_fact)))));
@@ -418,6 +422,56 @@ function chartDays(el, days) {
   });
 }
 
+// ---------- TikTok и Instagram (цифры из опроса в боте) ----------
+const SOC_FIELDS = [['tt_subs', 'TikTok подписчиков'], ['tt_videos', 'TikTok видео за неделю'], ['ig_subs', 'Instagram подписчиков'], ['ig_posts', 'Instagram постов за неделю']];
+function lastOf(rows, k) { for (let i = rows.length - 1; i >= 0; i--) if (rows[i][k] !== undefined) return { v: rows[i][k], i }; return null; }
+function renderSocMan() {
+  const box = $('#soc-manual');
+  const rows = S.social || [];
+  const head = h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'TikTok и Instagram'),
+    canSocial() ? h('button', { type: 'button', class: 'btn small', onclick: socForm }, '+ Внести цифры') : null);
+  if (!rows.length) {
+    box.replaceChildren(head, h('p', { class: 'hint flush' }, 'Цифр пока нет. Каждый понедельник бот спрашивает их у руководителя Медиа. Внести сразу можно командой /social в боте или кнопкой выше.'));
+    return;
+  }
+  const m = new Date().toISOString().slice(0, 7);
+  const month = rows.filter((r) => r.t.slice(0, 7) === m);
+  const sum = (k) => month.reduce((t, r) => t + (r[k] || 0), 0);
+  const subsStat = (k, label) => {
+    const l = lastOf(rows, k);
+    if (!l) return stat(label, '—', 'empty');
+    const p = lastOf(rows.slice(0, l.i), k);
+    const d = p ? l.v - p.v : null;
+    const el = stat(label, fmt(l.v), 'fact');
+    if (d !== null) el.append(h('span', { class: 'delta ' + (d > 0 ? 'up' : d < 0 ? 'down' : '') }, (d > 0 ? '+' : '') + fmt(d) + ' с прошлого раза'));
+    return el;
+  };
+  const last = rows[rows.length - 1];
+  box.replaceChildren(head,
+    h('div', { class: 'mini' },
+      subsStat('tt_subs', 'TikTok подписчиков'), subsStat('ig_subs', 'Instagram подписчиков'),
+      stat('Видео TikTok за месяц', fmt(sum('tt_videos'))), stat('Постов Instagram за месяц', fmt(sum('ig_posts')))),
+    h('p', { class: 'hint flush' }, 'Последнее обновление: ' + dateLabel(last.t.slice(0, 10)) + ', ' + (last.author || '—') + '. Цифры вносятся вручную раз в неделю.'),
+    h('ul', { class: 'posts' }, ...rows.slice(-5).reverse().map((r) => h('li', null,
+      h('span', { class: 'pm' }, dateLabel(r.t.slice(0, 10)) + ' · ' + (r.author || '—')),
+      h('span', null, SOC_FIELDS.filter(([k]) => r[k] !== undefined).map(([k, t]) => t + ': ' + fmt(r[k])).join(' · '))))));
+}
+function socForm() {
+  const last = (k) => { const l = lastOf(S.social || [], k); return l ? l.v : ''; };
+  dialog({ title: 'Цифры TikTok и Instagram', ok: 'Записать', body: [
+    ...SOC_FIELDS.map(([k, t]) => h('label', { class: 'fld' }, h('span', null, t),
+      h('input', { id: 's-' + k, type: 'number', min: 0, step: 1, inputmode: 'numeric', placeholder: /subs/.test(k) && last(k) !== '' ? 'было ' + fmt(last(k)) : '' }))),
+    h('p', null, 'Заполните то, что знаете, остальное можно оставить пустым.')],
+  submit: async () => {
+    const values = {};
+    for (const [k] of SOC_FIELDS) { const x = $('#s-' + k).value.trim(); if (x !== '') values[k] = Number(x); }
+    if (!Object.keys(values).length) throw new Error('Заполните хотя бы одно поле');
+    const r = await api('social', { values });
+    S.social = r.social; computeProgress(); renderHeader(); renderView();
+    toast('Цифры записаны');
+  } });
+}
+
 // ---------- план по месяцам ----------
 function renderRoadmap() {
   $('#rm-chips').replaceChildren(...PHASES.map(([k, t]) => h('button', { type: 'button', class: 'chip ph-' + (k || 'all') + (S.phase === k ? ' on' : ''), onclick: () => { S.phase = k; renderRoadmap(); } }, k ? h('i', { class: 'dot' }) : null, t)));
@@ -482,6 +536,16 @@ function renderReports() {
       stat('Подписчиков ВК · авто', subs === null ? '—' : fmt(subs), subs === null ? 'empty' : 'fact'));
   }
   const skip = vkAuto ? ['posts_vk', 'vk_subs', 'reach'] : [];
+  if (dept === 'media') {
+    const soc = (S.social || []).filter((r) => !S.repMonth || r.t.slice(0, 7) === S.repMonth);
+    if (soc.length) {
+      const lastIn = (k) => { const l = lastOf(soc, k); return l ? fmt(l.v) : '—'; };
+      const sumIn = (k) => fmt(soc.reduce((t, r) => t + (r[k] || 0), 0));
+      autoStats.push(stat('TikTok подписчиков · бот', lastIn('tt_subs'), 'fact'), stat('Видео TikTok · бот', sumIn('tt_videos'), 'fact'),
+        stat('Instagram подписчиков · бот', lastIn('ig_subs'), 'fact'), stat('Постов Instagram · бот', sumIn('ig_posts'), 'fact'));
+      skip.push('tiktok');
+    }
+  }
   $('#rep-sum').replaceChildren(...autoStats, ...SUMS[dept].filter(([k]) => !skip.includes(k)).map(([k, t, how]) => {
     let v = null;
     if (how === 'count') v = list.length;

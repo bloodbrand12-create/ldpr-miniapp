@@ -129,6 +129,7 @@ async function boot() {
     S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || [];
   } catch (e) { return gate('Нет доступа', e.message, true); }
   if (DEPT_ORDER.includes(S.me.role)) S.repDept = S.me.role;
+  { const d = new Date(); S.repMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
   computeProgress();
   $('#gate').hidden = true; $('#shell').hidden = false;
   $('#me-name').textContent = S.me.name; $('#me-role').textContent = ROLE_NAMES[S.me.role] || S.me.role;
@@ -466,7 +467,22 @@ function renderReports() {
     .sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created));
   // итоги
   const asc = [...list].reverse();
-  $('#rep-sum').replaceChildren(...SUMS[dept].map(([k, t, how]) => {
+  // для Медиа посты, просмотры и подписчики ВК берутся автоматически из ВК
+  const vkAuto = dept === 'media' && S.vk;
+  const autoStats = [];
+  if (vkAuto) {
+    const inPeriod = S.vk.posts.filter((p) => !S.repMonth || p.date.slice(0, 7) === S.repMonth);
+    const sum = (k) => inPeriod.reduce((t, p) => t + p[k], 0);
+    const dayList = S.vk.days.filter((d) => !S.repMonth || d.d.slice(0, 7) === S.repMonth);
+    const subs = dayList.length ? dayList[dayList.length - 1].n : null;
+    autoStats.push(
+      stat('Постов в ВК · авто', String(inPeriod.length), 'fact'),
+      stat('Просмотров ВК · авто', fmt(sum('views')), 'fact'),
+      stat('Лайков ВК · авто', fmt(sum('likes')), 'fact'),
+      stat('Подписчиков ВК · авто', subs === null ? '—' : fmt(subs), subs === null ? 'empty' : 'fact'));
+  }
+  const skip = vkAuto ? ['posts_vk', 'vk_subs', 'reach'] : [];
+  $('#rep-sum').replaceChildren(...autoStats, ...SUMS[dept].filter(([k]) => !skip.includes(k)).map(([k, t, how]) => {
     let v = null;
     if (how === 'count') v = list.length;
     else if (how === 'sum') { const xs = list.map((r) => r.values[k]).filter((x) => x !== undefined); v = xs.length ? xs.reduce((a, b) => a + b, 0) : null; }

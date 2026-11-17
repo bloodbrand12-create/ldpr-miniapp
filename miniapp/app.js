@@ -7,7 +7,7 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 const nf = new Intl.NumberFormat('ru-RU');
 const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const MON_FULL = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-const ROLE_NAMES = { admin: 'Администратор', media: 'Руководитель: Медиа', people: 'Руководитель: Работа с людьми', events: 'Руководитель: Мероприятия', viewer: 'Только просмотр' };
+const ROLE_NAMES = { admin: 'Администратор', deputy: 'Заместитель', media: 'Руководитель: Медиа', people: 'Руководитель: Работа с людьми', events: 'Руководитель: Мероприятия', viewer: 'Только просмотр' };
 const DEPT_ORDER = ['media', 'people', 'events'];
 const PHASES = [['', 'Все'], ['launch', 'Запуск'], ['recruit', 'Набор'], ['hold', 'Закрепление'], ['campaign', 'Кампания']];
 
@@ -37,8 +37,9 @@ const monthOf = (d) => d.slice(0, 7);
 const monthLabel = (m) => `${MON_FULL[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
 const dateLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 const initials = (n) => (n || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-const canWrite = (dept) => S.me && (S.me.role === 'admin' || S.me.role === dept);
-const myDepts = () => (S.me.role === 'admin' ? DEPT_ORDER : DEPT_ORDER.filter((d) => d === S.me.role));
+const anyDept = () => S.me && (S.me.role === 'admin' || S.me.role === 'deputy');
+const canWrite = (dept) => S.me && (anyDept() || S.me.role === dept);
+const myDepts = () => (anyDept() ? DEPT_ORDER : DEPT_ORDER.filter((d) => d === S.me.role));
 
 const TG = window.Telegram && window.Telegram.WebApp;
 async function api(action, payload) {
@@ -87,16 +88,26 @@ function computeProgress() {
       a.events += 1; a.participants += v.participants || 0;
     }
   }
+  // данные ВК собираются автоматически и важнее ручных
+  const vkMonth = {};
+  let vkFrom = null;
+  if (S.vk) {
+    for (const d of S.vk.days) { const m = d.d.slice(0, 7); (vkMonth[m] = vkMonth[m] || { posts: 0, views: 0 }).subs = d.n; }
+    for (const x of S.vk.posts) { const m = x.date.slice(0, 7); const o = (vkMonth[m] = vkMonth[m] || { posts: 0, views: 0 }); o.posts++; o.views += x.views; }
+    vkFrom = Object.keys(vkMonth).sort()[0] || null;
+  }
+  const thisMonth = new Date().toISOString().slice(0, 7);
   const pct = (f, p) => (f === null || !p ? null : Math.round((f / p) * 100));
   S.progress = S.plan.map((p) => {
     const a = byMonth[p.month] || { has: {} };
     const members_fact = a.members ?? null;
-    const vk_fact = a.vk ?? null;
+    const auto = vkFrom && p.month >= vkFrom && p.month <= thisMonth ? (vkMonth[p.month] || { posts: 0, views: 0 }) : null;
+    const vk_fact = auto && auto.subs !== undefined ? auto.subs : (a.vk ?? null);
     return { ...p,
       members_fact, members_pct: pct(members_fact, p.members_min),
       vk_fact, vk_pct: pct(vk_fact, p.vk_plan),
       tiktok_fact: a.tiktok ?? null,
-      posts_fact: a.has.media ? a.posts : null, reels_fact: a.has.media ? a.reels : null,
+      posts_fact: auto ? auto.posts : a.has.media ? a.posts : null, vk_views: auto ? auto.views : null, vk_auto: !!auto, reels_fact: a.has.media ? a.reels : null,
       events_fact: a.has.events ? a.events : null, participants: a.participants || 0,
       new_members: a.has.people ? a.new_members : null };
   });
@@ -115,7 +126,7 @@ async function boot() {
   if (!window.CONFIG || !/^https:\/\//.test(window.CONFIG.API_URL)) return gate('Не настроено', 'В файле config.js не указан адрес Google Apps Script.');
   try {
     const [plan, st] = await Promise.all([fetch('plan.json').then((r) => r.json()), api('state')]);
-    S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports;
+    S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || [];
   } catch (e) { return gate('Нет доступа', e.message, true); }
   if (DEPT_ORDER.includes(S.me.role)) S.repDept = S.me.role;
   computeProgress();
@@ -203,6 +214,7 @@ function renderSocial() {
   const n = S.now, last = S.plan[S.plan.length - 1];
   $('#soc-mini').replaceChildren(stat('ВК сейчас по плану', fmt(n.vk_plan)), statFact('ВК, факт', n.vk_fact), stat('ВК к августу', fmt(last.vk_plan)), stat('Reels в этом месяце', n.reels_min === null ? 'без нормы' : range(n.reels_min, n.reels_max)));
   chartVk($('#ch-vk')); chartContent($('#ch-content'));
+  renderVkLive();
   $('#soc-tt').replaceChildren(...S.progress.filter((r) => r.tiktok_target !== null || r.tiktok_fact !== null).map((r) =>
     h('li', null, h('span', { class: 'm' }, r.month_label), h('span', { class: 'v' }, fmt(r.tiktok_target)),
       h('span', { class: 'f' + (r.tiktok_fact !== null ? ' has' : '') }, r.tiktok_fact === null ? 'факт не внесён' : 'факт: ' + fmt(r.tiktok_fact)))));
@@ -295,7 +307,7 @@ function chartVk(el) {
   label(f, pts[0][0], pts[0][1] - 9, fmt(rows[0].vk_plan), 'hi', 'start');
   label(f, pts[pts.length - 1][0], pts[pts.length - 1][1] - 9, fmt(rows[rows.length - 1].vk_plan), 'hi', 'end');
   factLine(f, 'vk_fact');
-  hover(f, el, (r) => [['План', fmt(r.vk_plan)], ['Факт', nz(r.vk_fact, 'не внесён')], ['Выполнение', r.vk_pct === null ? '—' : r.vk_pct + '%']]);
+  hover(f, el, (r) => [['План', fmt(r.vk_plan)], ['Факт' + (r.vk_auto ? ' (из ВК)' : ''), nz(r.vk_fact, 'не внесён')], ['Выполнение', r.vk_pct === null ? '—' : r.vk_pct + '%']]);
 }
 function chartEvents(el) {
   const rows = S.progress;
@@ -327,6 +339,82 @@ function chartContent(el) {
     if (r.posts_fact !== null) f.svg.append(s('line', { x1: cx - bw - 4, x2: cx + bw + 4, y1: f.y(r.posts_fact), y2: f.y(r.posts_fact), stroke: '#f8d561', 'stroke-width': 3 }));
   });
   hover(f, el, (r) => [['Посты', range(r.posts_min, r.posts_max)], ['Reels', r.reels_min === null ? 'без нормы' : range(r.reels_min, r.reels_max)], ['Факт: посты', nz(r.posts_fact, 'не внесён')], ['Факт: Reels', nz(r.reels_fact, '—')]]);
+}
+
+// ---------- ВК в реальном времени ----------
+function renderVkLive() {
+  const box = $('#vk-live');
+  if (!S.vk) {
+    box.replaceChildren(h('h3', { class: 'h3' }, 'ВК в реальном времени'), h('p', { class: 'hint flush' }, anyDept()
+      ? 'Автосбор ВК не подключён. Добавьте в Apps Script свойства VK_TOKEN и VK_GROUP и снова нажмите в таблице «Молодёжка → Настроить бота».'
+      : 'Автосбор статистики ВК пока не подключён.'));
+    return;
+  }
+  const v = S.vk, days = v.days;
+  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+  const base = [...days].reverse().find((d) => d.d <= weekAgo) || days[0];
+  const delta = v.members - base.n;
+  const m = new Date().toISOString().slice(0, 7);
+  const monthPosts = v.posts.filter((p) => p.date.slice(0, 7) === m);
+  const views = monthPosts.reduce((t, p) => t + p.views, 0);
+  const upd = v.updated.slice(11, 16) + ', ' + dateLabel(v.updated.slice(0, 10));
+  const top = [...monthPosts].sort((a, b) => b.views - a.views).slice(0, 5);
+  box.replaceChildren(
+    h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'ВК в реальном времени'), h('span', { class: 'live' }, h('i', { class: 'live-dot' }), 'обновлено ' + upd)),
+    h('div', { class: 'mini' },
+      stat('Подписчиков сейчас', fmt(v.members), 'fact'),
+      stat('За 7 дней', (delta > 0 ? '+' : '') + fmt(delta), delta > 0 ? 'up' : delta < 0 ? 'down' : ''),
+      stat('Постов в этом месяце', String(monthPosts.length)),
+      stat('Просмотров за месяц', fmt(views))),
+    h('div', { class: 'chart small', id: 'ch-days' }),
+    h('h4', { class: 'h4' }, 'Лучшие посты месяца'),
+    top.length ? h('ul', { class: 'posts' }, ...top.map((p) => h('li', null,
+      h('a', { href: p.link, target: '_blank', rel: 'noopener noreferrer', class: 'pt' }, p.text || 'Пост без текста'),
+      h('span', { class: 'pm' }, dateLabel(p.date.slice(0, 10)) + ' · 👁 ' + fmt(p.views) + ' · ❤ ' + fmt(p.likes) + ' · ↗ ' + fmt(p.reposts) + ' · 💬 ' + fmt(p.comments)))))
+      : h('p', { class: 'hint flush' }, 'В этом месяце постов пока нет.'));
+  chartDays($('#ch-days'), days.slice(-60));
+}
+function chartDays(el, days) {
+  el.replaceChildren();
+  if (days.length < 2) { el.append(h('p', { class: 'hint flush' }, 'График роста появится, когда наберутся данные хотя бы за два дня.')); return; }
+  const W = Math.max(280, el.clientWidth || 600), H = 180, m = { l: 44, r: 14, t: 14, b: 24 };
+  const lo = Math.min(...days.map((d) => d.n)), hi = Math.max(...days.map((d) => d.n));
+  const pad = Math.max(2, Math.round((hi - lo) * 0.15));
+  const y0 = Math.max(0, lo - pad), y1 = hi + pad;
+  const x = (i) => m.l + (i * (W - m.l - m.r)) / (days.length - 1);
+  const y = (v) => H - m.b - ((v - y0) / (y1 - y0)) * (H - m.t - m.b);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Подписчики ВК по дням', preserveAspectRatio: 'none' });
+  svg.style.height = H + 'px';
+  el.append(svg);
+  [y0, Math.round((y0 + y1) / 2), y1].forEach((v) => {
+    svg.append(s('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'rgba(255,255,255,.07)' }));
+    const t = s('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }); t.textContent = nf.format(v); svg.append(t);
+  });
+  const stepL = Math.ceil(days.length / (W < 440 ? 4 : 7));
+  days.forEach((d, i) => {
+    if (i % stepL !== 0 && i !== days.length - 1) return;
+    if (i !== days.length - 1 && days.length - 1 - i < stepL / 2) return;
+    const t = s('text', { x: x(i), y: H - 6, 'text-anchor': i === days.length - 1 ? 'end' : i === 0 ? 'start' : 'middle', class: 'tick' });
+    t.textContent = dateLabel(d.d); svg.append(t);
+  });
+  const pts = days.map((d, i) => [x(i), y(d.n)]);
+  svg.append(s('path', { d: path(pts) + `L${pts[pts.length - 1][0]},${H - m.b}L${pts[0][0]},${H - m.b}Z`, fill: 'rgba(248,213,97,.12)' }));
+  svg.append(s('path', { d: path(pts), fill: 'none', stroke: '#f8d561', 'stroke-width': 2.5, 'stroke-linejoin': 'round' }));
+  const lp = pts[pts.length - 1];
+  svg.append(s('circle', { cx: lp[0], cy: lp[1], r: 4.5, fill: '#f8d561', stroke: '#0f1733', 'stroke-width': 2 }));
+  const tip = h('div', { class: 'tip', hidden: true }); el.append(tip);
+  const bw = (W - m.l - m.r) / (days.length - 1);
+  days.forEach((d, i) => {
+    const z = s('rect', { x: x(i) - bw / 2, y: 0, width: bw, height: H, fill: 'transparent' });
+    z.addEventListener('pointerenter', () => {
+      tip.replaceChildren(h('b', null, dateLabel(d.d)), h('div', null, h('span', null, 'Подписчиков: '), fmt(d.n)));
+      tip.hidden = false;
+      const box = el.getBoundingClientRect(), px = (x(i) / W) * box.width, tw = tip.offsetWidth;
+      tip.style.left = Math.max(0, Math.min(box.width - tw, px + 14 + tw > box.width ? px - tw - 14 : px + 14)) + 'px';
+    });
+    z.addEventListener('pointerleave', () => { tip.hidden = true; });
+    svg.append(z);
+  });
 }
 
 // ---------- план по месяцам ----------
@@ -393,7 +481,7 @@ function renderReports() {
     h('td', { class: 'rt' }, h('b', null, r.values.title || '—'), r.values.note || r.values.place ? h('small', null, r.values.place ? r.values.place + (r.values.note ? ' · ' + r.values.note : '') : r.values.note) : null,
       r.values.link ? h('small', null, h('a', { href: r.values.link, target: '_blank', rel: 'noopener noreferrer' }, 'ссылка')) : null),
     ...cols.map((k) => h('td', { class: fields[k].type === 'int' ? 'num' : '' }, r.values[k] === undefined ? '—' : fields[k].type === 'int' ? fmt(r.values[k]) : r.values[k])),
-    h('td', null, r.author_name),
+    h('td', null, r.author_name, r.entered_by ? h('small', { class: 'by' }, 'внёс(ла): ' + r.entered_by) : null),
     h('td', null, canWrite(dept) ? h('div', { class: 'acts' },
       h('button', { type: 'button', class: 'btn small', onclick: () => reportForm(dept, r) }, 'Изменить'),
       h('button', { type: 'button', class: 'btn small danger', onclick: () => deleteReport(r) }, 'Удалить')) : null))));
@@ -412,6 +500,20 @@ function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.g
 function reportForm(dept, rep) {
   const def = S.depts[dept], v = rep ? rep.values : {};
   const els = [h('label', { class: 'fld' }, h('span', null, 'Дата ', h('b', null, '*')), h('input', { type: 'date', id: 'f-date', required: true, value: rep ? rep.date : today() }))];
+  if (anyDept()) {
+    // зам и админ вносят отчёт за любого человека
+    const sel = h('select', { id: 'f-author' }, h('option', { value: S.me.id }, 'Я — ' + S.me.name),
+      ...S.people.filter((u) => u.id !== S.me.id).map((u) => h('option', { value: u.id }, u.name + ' · ' + (ROLE_NAMES[u.role] || u.role))),
+      h('option', { value: '__other' }, 'Другой человек…'));
+    const other = h('input', { id: 'f-author-name', maxlength: 80, placeholder: 'Имя и фамилия' });
+    const otherWrap = h('label', { class: 'fld', hidden: true }, h('span', null, 'Кто сделал'), other);
+    if (rep) {
+      if (rep.author && S.people.some((u) => u.id === rep.author)) sel.value = rep.author;
+      else { sel.value = '__other'; other.value = rep.author_name; otherWrap.hidden = false; }
+    }
+    sel.onchange = () => { otherWrap.hidden = sel.value !== '__other'; if (!otherWrap.hidden) other.focus(); };
+    els.push(h('label', { class: 'fld' }, h('span', null, 'Автор отчёта'), sel), otherWrap);
+  }
   for (const f of def.fields) {
     const idf = 'f-' + f.k, val = v[f.k] ?? '';
     let input;
@@ -424,12 +526,19 @@ function reportForm(dept, rep) {
     els.push(h('label', { class: 'fld' + (wide ? ' wide' : '') }, h('span', null, f.label, f.req ? h('b', null, ' *') : null), input));
   }
   if (dept === 'people') els.push(h('p', null, '«Всего в активе» — сколько человек в активе на эту дату. Из него считается факт на дашборде.'));
-  if (dept === 'media') els.push(h('p', null, 'Число подписчиков указывайте на дату отчёта — дашборд берёт последнее значение за месяц.'));
+  if (dept === 'media') els.push(h('p', null, S.vk
+    ? 'Подписчиков и посты ВК бот считает сам — эти поля можно не заполнять. TikTok указывайте на дату отчёта.'
+    : 'Число подписчиков указывайте на дату отчёта — дашборд берёт последнее значение за месяц.'));
   dialog({ title: (rep ? 'Изменить отчёт · ' : 'Новый отчёт · ') + def.name, body: els, ok: rep ? 'Сохранить' : 'Добавить',
     submit: async () => {
       const values = {};
       for (const f of def.fields) { const x = $('#f-' + f.k).value.trim(); if (x !== '') values[f.k] = f.type === 'int' ? Number(x) : x; }
       const body = { dept, date: $('#f-date').value, values };
+      if (anyDept()) {
+        const who = $('#f-author').value;
+        if (who === '__other') { body.author_name = $('#f-author-name').value.trim(); if (!body.author_name) throw new Error('Укажите, кто сделал'); }
+        else body.author_id = who;
+      }
       const r = rep ? await api('update', Object.assign({ id: rep.id }, body)) : await api('add', body);
       S.repDept = dept; S.repMonth = S.repMonth && S.repMonth !== monthOf(body.date) ? '' : S.repMonth;
       applyReports(r.reports);

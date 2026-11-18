@@ -6,7 +6,7 @@
 <title>Молодёжка ЛДПР Омск</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.svg">
-<link rel="stylesheet" href="app.css?v=5">
+<link rel="stylesheet" href="app.css?v=6">
 </head>
 <body>
 <div class="bg" aria-hidden="true"></div>
@@ -28,9 +28,10 @@
     <a class="nav" href="#overview" data-view="overview"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span>Обзор</span></a>
     <a class="nav" href="#members" data-view="members"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8"/><path d="M18.5 14.8c1.6.8 2.6 2.5 3 5.2"/></svg><span>Актив</span></a>
     <a class="nav" href="#social" data-view="social"><svg viewBox="0 0 24 24"><path d="M3 17l5-5 4 4 8-9"/><path d="M15 7h5v5"/></svg><span>Соцсети</span></a>
-    <a class="nav" href="#events" data-view="events"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg><span>Мероприятия</span></a>
+    <a class="nav" href="#events" data-view="events"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg><span>События</span></a>
     <a class="nav" href="#roadmap" data-view="roadmap"><svg viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4z"/><path d="M9 4v14M15 6v14"/></svg><span>План</span></a>
     <hr>
+    <a class="nav" href="#team" data-view="team"><svg viewBox="0 0 24 24"><rect x="4.5" y="4" width="15" height="17" rx="2.5"/><path d="M9 2.8h6v3H9z"/><path d="M8.5 12.5l2.2 2.2 4.8-4.8"/></svg><span>Команда</span></a>
     <a class="nav" href="#reports" data-view="reports"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span>Отчёты</span></a>
     <a class="nav" href="#users" data-view="users" id="nav-users" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg><span>Доступ</span></a>
   </nav>
@@ -54,6 +55,8 @@
       <div class="vhead"><h2 class="vtitle">Обзор месяца</h2><button type="button" class="btn primary" id="quick-add" hidden>+ Добавить отчёт</button></div>
       <p class="lead" id="ov-lead"></p>
       <div class="tiles" id="ov-tiles"></div>
+      <div class="card glass" id="ov-lights" hidden></div>
+      <div class="card glass" id="ov-next" hidden></div>
       <div class="card glass">
         <div class="card-h"><h3 class="h3">Последние отчёты</h3><a class="link" href="#reports">Все отчёты →</a></div>
         <ul class="feed" id="ov-feed"></ul>
@@ -91,6 +94,7 @@
     <section class="view" data-view="events" hidden>
       <h2 class="vtitle">Мероприятия</h2>
       <div class="mini" id="ev-mini"></div>
+      <div class="card glass" id="ev-cal"></div>
       <div class="card glass">
         <div class="card-h"><h3 class="h3">По месяцам</h3><ul class="legend"><li><i class="sw plan"></i>План</li><li><i class="sw factbar"></i>Факт</li></ul></div>
         <div class="chart" id="ch-events"></div>
@@ -112,6 +116,20 @@
           <li>Плана на сентябрь в дорожной карте нет. Август: в соцсетях «до 6000 (ВК)», в KPI — 1450; на графике KPI. Декабрь: план по активу ниже ноябрьского.</li>
         </ul>
       </details>
+    </section>
+
+    <section class="view" data-view="team" hidden>
+      <div class="vhead"><h2 class="vtitle">Команда</h2><div class="acts"><button type="button" class="btn" id="sum-btn">Сводка за месяц</button><button type="button" class="btn primary" id="task-add" hidden>+ Поручение</button></div></div>
+      <div class="card glass" id="team-chat" hidden></div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Поручения</h3><div class="chips" id="task-chips" role="group" aria-label="Фильтр поручений"></div></div>
+        <ul class="tasks" id="task-list"></ul>
+      </div>
+      <div class="card glass">
+        <div class="card-h"><h3 class="h3">Рейтинг активности</h3><div class="chips" id="rate-chips" role="group" aria-label="Период"></div></div>
+        <div class="tablewrap"><table class="table rate"><thead><tr><th>#</th><th>Кто</th><th class="num">Отчётов</th><th class="num">Привёл новых</th><th class="num">Поручений в срок</th><th class="num">Баллы</th></tr></thead><tbody id="rate-body"></tbody></table></div>
+        <p class="hint flush">Баллы: отчёт — 2, каждый новый человек (активист или новичок на мероприятии) — 1, поручение в срок — 3, с опозданием — 1.</p>
+      </div>
     </section>
 
     <section class="view" data-view="reports" hidden>
@@ -151,7 +169,7 @@
 
 <div class="toast" id="toast" role="status" hidden></div>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="config.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="config.js?v=6"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

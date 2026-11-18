@@ -11,7 +11,8 @@ const ROLE_NAMES = { admin: 'Администратор', deputy: 'Замест�
 const DEPT_ORDER = ['media', 'people', 'events'];
 const PHASES = [['', 'Все'], ['launch', 'Запуск'], ['recruit', 'Набор'], ['hold', 'Закрепление'], ['campaign', 'Кампания']];
 
-const S = { me: null, depts: {}, plan: [], reports: [], progress: [], now: null, view: 'overview', phase: '', repDept: 'media', repMonth: '' };
+const S = { me: null, depts: {}, plan: [], reports: [], progress: [], now: null, view: 'overview', phase: '', repDept: 'media', repMonth: '',
+  tasks: [], cal: [], team: null, taskFilter: '', ratePeriod: 'month' };
 
 // ---------- утилиты ----------
 function h(tag, attrs, ...kids) {
@@ -41,6 +42,7 @@ const anyDept = () => S.me && (S.me.role === 'admin' || S.me.role === 'deputy');
 const canWrite = (dept) => S.me && (anyDept() || S.me.role === dept);
 const canSocial = () => S.me && ['media', 'admin', 'deputy'].includes(S.me.role);
 const myDepts = () => (anyDept() ? DEPT_ORDER : DEPT_ORDER.filter((d) => d === S.me.role));
+const canPlan = () => S.me && (anyDept() || S.me.role === 'events');
 
 const TG = window.Telegram && window.Telegram.WebApp;
 async function api(action, payload) {
@@ -130,6 +132,7 @@ async function boot() {
   try {
     const [plan, st] = await Promise.all([fetch('plan.json').then((r) => r.json()), api('state')]);
     S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || []; S.social = st.social || [];
+    S.tasks = st.tasks || []; S.cal = st.plan || []; S.team = st.team || null;
   } catch (e) { return gate('Нет доступа', e.message, true); }
   if (DEPT_ORDER.includes(S.me.role)) S.repDept = S.me.role;
   { const d = new Date(); S.repMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
@@ -142,12 +145,25 @@ async function boot() {
   renderHeader();
   const wantAdd = location.hash === '#add';
   if (wantAdd) history.replaceState(null, '', '#reports');
+  if (deepLink()) return;
   route();
   if (wantAdd && myDepts().length) $('#quick-add').click();
 }
+// ссылки из бота: #ev-<id> — карточка мероприятия, #evrep-<id> — сразу отчёт по нему
+function deepLink() {
+  const m = /^#(ev|evrep)-(\w+)$/.exec(location.hash);
+  if (!m) return false;
+  history.replaceState(null, '', '#events');
+  route();
+  const e = S.cal.find((x) => x.id === m[2]);
+  if (!e) { toast('Мероприятие не найдено — возможно, его удалили'); return true; }
+  if (m[1] === 'evrep' && !e.report && canWrite('events')) reportFromPlan(e);
+  else eventDialog(e);
+  return true;
+}
 
 // ---------- навигация ----------
-const VIEWS = ['overview', 'members', 'social', 'events', 'roadmap', 'reports', 'users'];
+const VIEWS = ['overview', 'members', 'social', 'events', 'roadmap', 'team', 'reports', 'users'];
 function route() {
   let v = location.hash.slice(1);
   if (!VIEWS.includes(v) || (v === 'users' && S.me.role !== 'admin')) v = 'overview';
@@ -157,10 +173,10 @@ function route() {
   renderView();
   window.scrollTo({ top: 0 });
 }
-window.addEventListener('hashchange', () => { if (S.me && location.hash !== '#add') route(); });
+window.addEventListener('hashchange', () => { if (S.me && location.hash !== '#add' && !deepLink()) route(); });
 function renderView() {
   ({ overview: renderOverview, members: renderMembers, social: renderSocial, events: renderEvents,
-    roadmap: renderRoadmap, reports: renderReports, users: renderUsers })[S.view]();
+    roadmap: renderRoadmap, team: renderTeam, reports: renderReports, users: renderUsers })[S.view]();
 }
 let rsz;
 window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(() => S.me && ['members', 'social', 'events'].includes(S.view) && renderView(), 150); });
@@ -206,6 +222,8 @@ function renderOverview() {
     h('span', { class: 'av' }, initials(S.depts[r.dept].name)),
     h('span', { class: 't' }, h('b', null, r.values.title || '—'), h('small', null, `${S.depts[r.dept].name} · ${r.author_name}`)),
     h('span', { class: 'd' }, dateLabel(r.date)))) : [h('li', null, h('span', { class: 'none' }, 'Отчётов пока нет. Руководители направлений добавляют их в разделе «Отчёты».'))]));
+  renderLights();
+  renderNext();
 }
 
 function renderMembers() {
@@ -229,6 +247,7 @@ function renderEvents() {
   const total = S.plan.reduce((t, r) => t + (r.events_plan || 0), 0);
   $('#ev-mini').replaceChildren(stat('В этом месяце', n.events_plan === null ? 'агитация' : String(n.events_plan)), statFact('Факт', n.events_fact),
     stat('Участников за месяц', n.events_fact === null ? '—' : fmt(n.participants)), stat('Всего за сезон', String(total)));
+  renderCal();
   chartEvents($('#ch-events'));
 }
 
@@ -559,9 +578,11 @@ function renderReports() {
   $('#rep-body').replaceChildren(...list.map((r) => h('tr', null,
     h('td', null, dateLabel(r.date)),
     h('td', { class: 'rt' }, h('b', null, r.values.title || '—'), r.values.note || r.values.place ? h('small', null, r.values.place ? r.values.place + (r.values.note ? ' · ' + r.values.note : '') : r.values.note) : null,
-      r.values.link ? h('small', null, h('a', { href: r.values.link, target: '_blank', rel: 'noopener noreferrer' }, 'ссылка')) : null),
+      r.values.link ? h('small', null, h('a', { href: r.values.link, target: '_blank', rel: 'noopener noreferrer' }, 'ссылка')) : null,
+      thumbs(r.photos)),
     ...cols.map((k) => h('td', { class: fields[k].type === 'int' ? 'num' : '' }, r.values[k] === undefined ? '—' : fields[k].type === 'int' ? fmt(r.values[k]) : r.values[k])),
-    h('td', null, r.author_name, r.entered_by ? h('small', { class: 'by' }, 'внёс(ла): ' + r.entered_by) : null),
+    h('td', null, r.author_name, r.entered_by ? h('small', { class: 'by' }, 'внёс(ла): ' + r.entered_by) : null,
+      r.reviewed ? h('small', { class: 'ok-by' }, '✓ принято: ' + r.reviewed.split(' · ')[0]) : null),
     h('td', null, canWrite(dept) ? h('div', { class: 'acts' },
       h('button', { type: 'button', class: 'btn small', onclick: () => reportForm(dept, r) }, 'Изменить'),
       h('button', { type: 'button', class: 'btn small danger', onclick: () => deleteReport(r) }, 'Удалить')) : null))));
@@ -577,9 +598,10 @@ $('#quick-add').addEventListener('click', () => {
 });
 
 function today() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
-function reportForm(dept, rep) {
-  const def = S.depts[dept], v = rep ? rep.values : {};
-  const els = [h('label', { class: 'fld' }, h('span', null, 'Дата ', h('b', null, '*')), h('input', { type: 'date', id: 'f-date', required: true, value: rep ? rep.date : today() }))];
+function reportForm(dept, rep, pre) {
+  const def = S.depts[dept], v = rep ? rep.values : (pre && pre.values) || {};
+  const els = [h('label', { class: 'fld' }, h('span', null, 'Дата ', h('b', null, '*')), h('input', { type: 'date', id: 'f-date', required: true, value: rep ? rep.date : (pre && pre.date) || today() }))];
+  if (pre && pre.plan_title) els.push(h('p', null, 'Отчёт по мероприятию из календаря «' + pre.plan_title + '». После сохранения оно отметится как проведённое.'));
   if (anyDept()) {
     // зам и админ вносят отчёт за любого человека
     const sel = h('select', { id: 'f-author' }, h('option', { value: S.me.id }, 'Я — ' + S.me.name),
@@ -609,28 +631,340 @@ function reportForm(dept, rep) {
   if (dept === 'media') els.push(h('p', null, S.vk
     ? 'Подписчиков и посты ВК бот считает сам — эти поля можно не заполнять. TikTok указывайте на дату отчёта.'
     : 'Число подписчиков указывайте на дату отчёта — дашборд берёт последнее значение за месяц.'));
+  const had = rep ? (rep.photos || []).length : 0;
+  const photoInput = h('input', { id: 'f-photos', type: 'file', accept: 'image/*', multiple: true });
+  els.push(h('label', { class: 'fld wide' }, h('span', null, 'Фото' + (had ? ` (уже ${had}, можно ещё ${10 - had})` : ' (до 10 штук)')), photoInput));
   dialog({ title: (rep ? 'Изменить отчёт · ' : 'Новый отчёт · ') + def.name, body: els, ok: rep ? 'Сохранить' : 'Добавить',
     submit: async () => {
       const values = {};
       for (const f of def.fields) { const x = $('#f-' + f.k).value.trim(); if (x !== '') values[f.k] = f.type === 'int' ? Number(x) : x; }
+      const files = Array.from(photoInput.files || []);
+      if (had + files.length > 10) throw new Error(`Можно прикрепить не больше 10 фото, сейчас выбрано ${files.length}`);
       const body = { dept, date: $('#f-date').value, values };
+      if (pre && pre.plan_id) body.plan_id = pre.plan_id;
       if (anyDept()) {
         const who = $('#f-author').value;
         if (who === '__other') { body.author_name = $('#f-author-name').value.trim(); if (!body.author_name) throw new Error('Укажите, кто сделал'); }
         else body.author_id = who;
       }
       const r = rep ? await api('update', Object.assign({ id: rep.id }, body)) : await api('add', body);
+      if (r.plan) S.cal = r.plan;
       S.repDept = dept; S.repMonth = S.repMonth && S.repMonth !== monthOf(body.date) ? '' : S.repMonth;
       applyReports(r.reports);
       if (TG && TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success');
       toast(rep ? 'Отчёт сохранён' : 'Отчёт добавлен');
+      // фото грузим после сохранения: отчёт уже записан, даже если фото не дойдут
+      if (files.length) uploadPhotos(rep ? rep.id : r.id, files);
     } });
+}
+// фото: уменьшаем на телефоне до 1600 px, чтобы грузилось быстро
+async function shrink(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('Не удалось открыть фото «' + file.name + '»')); i.src = url; });
+    const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82);
+  } finally { URL.revokeObjectURL(url); }
+}
+async function uploadPhotos(id, files) {
+  let ok = 0;
+  for (let i = 0; i < files.length; i++) {
+    toast(`Загружаю фото ${i + 1} из ${files.length}…`);
+    try { applyReports((await api('photo', { id, data: await shrink(files[i]) })).reports); ok++; }
+    catch (e) { toast('Фото не загрузилось: ' + e.message); return; }
+  }
+  toast(ok === 1 ? 'Фото прикреплено' : `Прикреплено фото: ${ok}`);
+}
+const driveId = (link) => (/\/d\/([\w-]+)/.exec(link) || [])[1];
+function thumbs(photos) {
+  if (!photos || !photos.length) return null;
+  return h('span', { class: 'thumbs' }, ...photos.map((l) => h('a', { href: l, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Открыть фото' },
+    h('img', { src: 'https://drive.google.com/thumbnail?id=' + driveId(l) + '&sz=w200', alt: '', loading: 'lazy' }))));
 }
 function deleteReport(r) {
   dialog({ title: 'Удалить отчёт?', ok: 'Удалить', danger: true,
     body: [h('p', null, `«${r.values.title || 'без названия'}» от ${dateLabel(r.date)} будет удалён без возможности восстановления.`)],
     submit: async () => { const x = await api('delete', { id: r.id }); applyReports(x.reports); toast('Отчёт удалён'); } });
 }
+
+// ---------- светофор и прогноз ----------
+const MON_DAT = ['январю', 'февралю', 'марту', 'апрелю', 'маю', 'июню', 'июлю', 'августу', 'сентябрю', 'октябрю', 'ноябрю', 'декабрю'];
+const monthKey = (d = new Date()) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+// наклон прямой по точкам [x, y] (метод наименьших квадратов)
+function slope(pts) {
+  const n = pts.length, mx = pts.reduce((t, p) => t + p[0], 0) / n, my = pts.reduce((t, p) => t + p[1], 0) / n;
+  const den = pts.reduce((t, p) => t + (p[0] - mx) ** 2, 0);
+  return den ? pts.reduce((t, p) => t + (p[0] - mx) * (p[1] - my), 0) / den : 0;
+}
+function lightRows() {
+  const i = S.progress.findIndex((r) => r.month === monthKey());
+  if (i < 0) return null;
+  const P = S.progress, cur = P[i], prev = P[i - 1], end = P[P.length - 1];
+  const d = new Date(), dim = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(), frac = d.getDate() / dim;
+  const ramp = (a, b) => (b === null || b === undefined ? a : b + (a - b) * frac);   // план «к сегодняшнему дню»
+  const latest = (k) => { for (let j = i; j >= 0; j--) if (P[j][k] !== null) return P[j][k]; return null; };
+  const trend = (k) => {
+    const pts = P.slice(0, i + 1).map((r, j) => [j, r[k]]).filter((p) => p[1] !== null).slice(-4);
+    if (pts.length < 2) return null;
+    const lp = pts[pts.length - 1];
+    return Math.max(0, Math.round(lp[1] + slope(pts) * (P.length - 1 - lp[0])));
+  };
+  const endLabel = MON_DAT[+end.month.slice(5, 7) - 1] + ' ' + end.month.slice(0, 4);
+  const monthEnd = d.getDate() >= 5;
+  const rows = [];
+  // актив
+  rows.push({ name: 'Актив', fact: latest('members_fact'), need: Math.round(ramp(cur.members_min, prev && prev.members_min)),
+    fc: trend('members_fact'), goal: end.members_min, goalText: range(end.members_min, end.members_max), fcWhen: 'к ' + endLabel, href: '#members' });
+  // подписчики ВК: прогноз по скорости роста за последние 30 дней
+  let vkFc = trend('vk_fact');
+  if (S.vk && S.vk.days.length >= 7) {
+    const days = S.vk.days, lastD = days[days.length - 1];
+    const from = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+    const base = days.find((x) => x.d >= from) || days[0];
+    const span = (Date.parse(lastD.d) - Date.parse(base.d)) / 864e5;
+    if (span >= 6) {
+      const left = (Date.parse(end.month + '-28') - Date.now()) / 864e5;
+      vkFc = Math.max(0, Math.round(S.vk.members + ((lastD.n - base.n) / span) * Math.max(0, left)));
+    }
+  }
+  rows.push({ name: 'Подписчики ВК', fact: S.vk ? S.vk.members : latest('vk_fact'), need: Math.round(ramp(cur.vk_plan, prev && prev.vk_plan)),
+    fc: vkFc, goal: end.vk_plan, goalText: fmt(end.vk_plan), fcWhen: 'к ' + endLabel, href: '#social' });
+  // посты и Reels за месяц
+  if (cur.posts_min !== null) rows.push({ name: 'Посты в этом месяце', fact: cur.posts_fact, need: Math.round(cur.posts_min * frac),
+    fc: monthEnd && cur.posts_fact !== null ? Math.round(cur.posts_fact / frac) : null, goal: cur.posts_min, goalText: range(cur.posts_min, cur.posts_max), fcWhen: 'к концу месяца', href: '#social' });
+  if (cur.reels_min !== null) rows.push({ name: 'Reels в этом месяце', fact: cur.reels_fact, need: Math.round(cur.reels_min * frac),
+    fc: monthEnd && cur.reels_fact !== null ? Math.round(cur.reels_fact / frac) : null, goal: cur.reels_min, goalText: range(cur.reels_min, cur.reels_max), fcWhen: 'к концу месяца', href: '#social' });
+  // мероприятия: проведённые + запланированные в календаре до конца месяца
+  if (cur.events_plan !== null) {
+    const t = today(), done = cur.events_fact || 0;
+    const ahead = S.cal.filter((e) => e.status === 'planned' && e.date >= t && e.date.slice(0, 7) === cur.month).length;
+    rows.push({ name: 'Мероприятия в этом месяце', fact: done, need: Math.floor(cur.events_plan * frac), fc: done + ahead, goal: cur.events_plan,
+      goalText: String(cur.events_plan), fcWhen: 'с учётом календаря', href: '#events', note: ahead ? `ещё ${ahead} в календаре` : '' });
+  }
+  return rows.map((r) => {
+    let st = ['none', 'Нет данных'];
+    if (r.fact !== null) st = r.fact >= r.need ? ['ok', 'В графике'] : r.fact >= r.need * 0.8 ? ['warn', 'Чуть отстаём'] : ['bad', 'Отстаём'];
+    return Object.assign(r, { st });
+  });
+}
+function renderLights() {
+  const box = $('#ov-lights'), rows = lightRows();
+  box.hidden = !rows;
+  if (!rows) return;
+  box.replaceChildren(
+    h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'Светофор: идём ли по плану'), h('span', { class: 'hint flush' }, 'план «к сегодня» считается по дням месяца')),
+    h('ul', { class: 'lights' }, ...rows.map((r) => h('li', null,
+      h('a', { href: r.href, class: 'lt-' + r.st[0] },
+        h('i', { class: 'lamp', 'aria-hidden': 'true' }),
+        h('span', { class: 'lt-name' }, r.name, h('small', null, r.st[1])),
+        h('span', { class: 'lt-fact' }, h('b', null, fmt(r.fact)), h('small', null, 'нужно к сегодня ≈ ' + fmt(r.need))),
+        h('span', { class: 'lt-fc' }, r.fc === null ? h('small', null, r.fcWhen === 'к концу месяца' ? 'прогноз — после 5-го числа' : 'для прогноза нужно больше данных')
+          : [h('span', { class: 'pill ' + (r.fc >= r.goal ? 'good' : 'bad') }, '≈ ' + fmt(r.fc)), h('small', null, r.fcWhen + ' · цель ' + r.goalText + (r.note ? ' · ' + r.note : ''))]))))));
+}
+function renderNext() {
+  const box = $('#ov-next'), t = today();
+  const evs = S.cal.filter((e) => e.status === 'planned' && e.date >= t).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).slice(0, 3);
+  const mine = S.tasks.filter((x) => x.to === S.me.id && x.status === 'open');
+  const late = mine.filter((x) => x.due < t).length;
+  box.hidden = !evs.length && !mine.length;
+  box.replaceChildren(...[h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'Ближайшее'), h('a', { class: 'link', href: '#events' }, 'Календарь →')),
+    mine.length ? h('a', { class: 'next-tasks' + (late ? ' late' : ''), href: '#team' }, '📌 Ваши поручения: ' + mine.length + (late ? ` · просрочено ${late}` : ''), h('span', null, '→')) : null,
+    evs.length ? h('div', { class: 'evlist' }, ...evs.map(evItem)) : null].filter(Boolean));
+}
+
+// ---------- календарь мероприятий ----------
+const DEFAULT_CHECKLIST = ['Согласовать площадку', 'Анонс в ВК и чатах', 'Список участников', 'Фото и видео на месте', 'Пост-отчёт после мероприятия'];
+function evItem(e) {
+  const done = e.checklist.filter((x) => x.d).length, all = e.checklist.length;
+  const d = new Date(e.date + 'T00:00:00');
+  return h('button', { type: 'button', class: 'ev-item st-' + e.status, onclick: () => eventDialog(e) },
+    h('span', { class: 'ev-date' }, h('b', null, String(d.getDate())), MON[d.getMonth()]),
+    h('span', { class: 'ev-body' }, h('b', null, e.title),
+      h('small', null, [e.time, e.place, e.owner_name ? 'отв. ' + e.owner_name : ''].filter(Boolean).join(' · ') || 'без подробностей')),
+    e.status === 'cancelled' ? h('span', { class: 'st bad' }, 'отменено')
+      : e.status === 'done' ? h('span', { class: 'st ok' }, 'проведено')
+        : e.date < today() ? h('span', { class: 'st now' }, 'нужен отчёт')
+          : all ? h('span', { class: 'ev-prog', title: 'Подготовка' }, h('span', { class: 'bar' }, h('i', { style: `width:${Math.round((done / all) * 100)}%` })), `${done}/${all}`) : null);
+}
+function renderCal() {
+  const box = $('#ev-cal'), t = today();
+  const by = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
+  const up = S.cal.filter((e) => e.status === 'planned' && e.date >= t).sort(by);
+  const need = S.cal.filter((e) => e.status === 'planned' && e.date < t).sort(by);
+  const past = S.cal.filter((e) => e.status !== 'planned').sort(by).reverse().slice(0, 5);
+  const sec = (title, list) => (list.length ? [h('h4', { class: 'h4' }, title), h('div', { class: 'evlist' }, ...list.map(evItem))] : []);
+  box.replaceChildren(h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'Календарь мероприятий'),
+    canPlan() ? h('button', { type: 'button', class: 'btn small primary', onclick: () => planForm() }, '+ Запланировать') : null),
+  ...(S.cal.length ? [...sec('Впереди', up), ...sec('Прошли — ждут отчёта', need), ...sec('Недавние', past)]
+    : [h('p', { class: 'hint flush' }, canPlan() ? 'Запланируйте мероприятие заранее: бот напомнит ответственному за 3 дня и накануне, а после даты попросит заполнить отчёт.' : 'Запланированных мероприятий пока нет.')]));
+}
+function eventDialog(e) {
+  const editable = canPlan() || e.owner === S.me.id;
+  const t = today();
+  const list = e.checklist.map((c, i) => {
+    const box = h('input', { type: 'checkbox', disabled: !editable || e.status !== 'planned' || null });
+    box.checked = c.d;
+    box.onchange = async () => {
+      box.disabled = true;
+      try { S.cal = (await api('planCheck', { id: e.id, i, d: box.checked })).plan; e = S.cal.find((x) => x.id === e.id) || e; renderView(); }
+      catch (err) { box.checked = !box.checked; toast(err.message); }
+      finally { box.disabled = false; }
+    };
+    return h('label', { class: 'chk' }, box, h('span', null, c.t));
+  });
+  const close = (fn) => () => { $('#dlg').close(); setTimeout(fn, 0); };
+  const acts = [];
+  if (e.status === 'planned' && e.date <= t && !e.report && canWrite('events')) acts.push(h('button', { type: 'button', class: 'btn primary', onclick: close(() => reportFromPlan(e)) }, '📝 Заполнить отчёт'));
+  if (canPlan()) {
+    if (e.status === 'planned') acts.push(h('button', { type: 'button', class: 'btn', onclick: close(() => planForm(e)) }, 'Изменить'));
+    acts.push(h('button', { type: 'button', class: 'btn', onclick: close(() => planStatus(e, e.status === 'cancelled' ? 'planned' : 'cancelled')) }, e.status === 'cancelled' ? 'Вернуть в план' : 'Отменить'));
+    acts.push(h('button', { type: 'button', class: 'btn danger', onclick: close(() => planDelete(e)) }, 'Удалить'));
+  }
+  dialog({ title: e.title, ok: 'Закрыть', info: true, submit: async () => {}, body: [
+    h('p', null, h('b', null, new Date(e.date + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }) + (e.time ? ', ' + e.time : '')),
+      [e.kind, e.place].filter(Boolean).length ? ' · ' + [e.kind, e.place].filter(Boolean).join(' · ') : ''),
+    h('p', null, 'Ответственный: ' + (e.owner_name || 'не назначен') + (e.status === 'done' ? ' · ✓ отчёт внесён' : e.status === 'cancelled' ? ' · отменено' : '')),
+    list.length ? h('div', { class: 'wide chks' }, h('span', { class: 'h4' }, 'Подготовка'), ...list) : null,
+    acts.length ? h('div', { class: 'wide dlg-acts' }, ...acts) : null].filter(Boolean) });
+}
+function reportFromPlan(e) {
+  reportForm('events', null, { plan_id: e.id, plan_title: e.title, date: e.date <= today() ? e.date : today(),
+    values: { title: e.title, kind: e.kind || '', place: e.place || '' } });
+}
+function planForm(e) {
+  const owner = h('select', { id: 'p-owner' }, h('option', { value: '' }, '— не назначен —'),
+    ...S.people.map((u) => h('option', { value: u.id }, u.name + (u.id === S.me.id ? ' (я)' : ''))));
+  owner.value = e ? e.owner : '';
+  const kind = h('select', { id: 'p-kind' }, h('option', { value: '' }, '— выберите —'), ...S.depts.events.fields.find((f) => f.k === 'kind').options.map((o) => h('option', { value: o }, o)));
+  kind.value = e ? e.kind : '';
+  const chk = h('textarea', { id: 'p-check', rows: 5, placeholder: 'Каждый пункт с новой строки' });
+  chk.value = e ? e.checklist.map((c) => c.t).join('\n') : DEFAULT_CHECKLIST.join('\n');
+  dialog({ title: e ? 'Изменить мероприятие' : 'Запланировать мероприятие', ok: e ? 'Сохранить' : 'Запланировать', body: [
+    h('label', { class: 'fld wide' }, h('span', null, 'Название ', h('b', null, '*')), h('input', { id: 'p-title', maxlength: 200, value: e ? e.title : '' })),
+    h('label', { class: 'fld' }, h('span', null, 'Дата ', h('b', null, '*')), h('input', { id: 'p-date', type: 'date', value: e ? e.date : '' })),
+    h('label', { class: 'fld' }, h('span', null, 'Время'), h('input', { id: 'p-time', type: 'time', value: e ? e.time : '' })),
+    h('label', { class: 'fld' }, h('span', null, 'Формат'), kind),
+    h('label', { class: 'fld' }, h('span', null, 'Ответственный'), owner),
+    h('label', { class: 'fld wide' }, h('span', null, 'Место'), h('input', { id: 'p-place', maxlength: 200, value: e ? e.place : '' })),
+    h('label', { class: 'fld wide' }, h('span', null, 'Чек-лист подготовки'), chk),
+    h('p', null, 'Ответственному придёт сообщение, а за 3 дня и накануне — напоминание с чек-листом.')],
+  submit: async () => {
+    const old = e ? e.checklist : [];
+    const checklist = $('#p-check').value.split('\n').map((x) => x.trim()).filter(Boolean)
+      .map((t) => ({ t, d: !!(old.find((c) => c.t === t) || {}).d }));
+    const r = await api('planSave', { id: e ? e.id : '', title: $('#p-title').value, date: $('#p-date').value, time: $('#p-time').value,
+      kind: kind.value, place: $('#p-place').value, owner: owner.value, checklist });
+    S.cal = r.plan; renderView(); toast(e ? 'Сохранено' : 'Мероприятие в календаре');
+  } });
+}
+async function planStatus(e, status) {
+  try { S.cal = (await api('planStatus', { id: e.id, status })).plan; renderView(); toast(status === 'cancelled' ? 'Мероприятие отменено' : 'Снова в плане'); }
+  catch (err) { toast(err.message); }
+}
+function planDelete(e) {
+  dialog({ title: 'Удалить мероприятие?', ok: 'Удалить', danger: true, body: [h('p', null, `«${e.title}» пропадёт из календаря. Отчёты при этом не удаляются.`)],
+    submit: async () => { S.cal = (await api('planDelete', { id: e.id })).plan; renderView(); toast('Удалено'); } });
+}
+
+// ---------- команда: поручения, рейтинг, сводка ----------
+function renderTeam() {
+  $('#task-add').hidden = !anyDept();
+  const chat = $('#team-chat');
+  chat.hidden = !S.team;
+  if (S.team) chat.replaceChildren(h('p', { class: 'hint flush' }, S.team.chat
+    ? h('span', null, '💬 Общий чат подключён' + (S.team.title ? ': «' + S.team.title + '»' : '') + '. Туда приходят новые отчёты, план мероприятий, напоминания накануне, итоги недели по ВК и сводка за месяц.')
+    : h('span', null, '💬 Общий чат не подключён. Добавьте бота в групповой чат команды и отправьте там команду /bind — бот начнёт присылать туда новые отчёты, анонсы и сводки.')));
+  renderTasks();
+  renderRating();
+}
+function renderTasks() {
+  const t = today();
+  const mineN = S.tasks.filter((x) => x.to === S.me.id && x.status === 'open').length;
+  if (!S.taskFilter) S.taskFilter = mineN ? 'mine' : 'open';
+  const F = [['mine', 'Мои'], ['open', 'В работе'], ['done', 'Выполнены'], ['all', 'Все']];
+  $('#task-chips').replaceChildren(...F.map(([k, l]) => h('button', { type: 'button', class: 'chip' + (S.taskFilter === k ? ' on' : ''), onclick: () => { S.taskFilter = k; renderTasks(); } }, l)));
+  const list = S.tasks.filter((x) => S.taskFilter === 'all' || (S.taskFilter === 'mine' ? x.to === S.me.id && x.status === 'open' : x.status === S.taskFilter))
+    .sort((a, b) => (a.status === b.status ? (a.status === 'open' ? a.due.localeCompare(b.due) : b.done_at.localeCompare(a.done_at)) : a.status === 'open' ? -1 : 1));
+  const act = (label, cls, fn) => h('button', { type: 'button', class: 'btn small ' + cls, onclick: fn }, label);
+  const run = (action, x, msg) => async () => {
+    try { S.tasks = (await api(action, { id: x.id })).tasks; renderTasks(); renderRating(); toast(msg); } catch (e) { toast(e.message); }
+  };
+  $('#task-list').replaceChildren(...(list.length ? list.map((x) => {
+    const late = x.status === 'open' && x.due < t;
+    const btns = [];
+    if (x.status === 'open' && (x.to === S.me.id || anyDept())) btns.push(act('✓ Готово', 'primary', run('taskDone', x, 'Отмечено как выполненное')));
+    if (x.status === 'done' && anyDept()) btns.push(act('Вернуть', '', run('taskReopen', x, 'Снова в работе')));
+    if (anyDept()) btns.push(act('Удалить', 'danger', () => dialog({ title: 'Удалить поручение?', ok: 'Удалить', danger: true, body: [h('p', null, `«${x.text}» будет удалено.`)],
+      submit: async () => { S.tasks = (await api('taskDelete', { id: x.id })).tasks; renderTasks(); toast('Удалено'); } })));
+    return h('li', { class: 'task ' + (x.status === 'done' ? 'done' : late ? 'late' : '') },
+      h('span', { class: 'tk-mark', 'aria-hidden': 'true' }, x.status === 'done' ? '✓' : ''),
+      h('span', { class: 'tk-body' }, h('b', null, x.text),
+        h('small', null, x.to_name + ' · ' + (x.status === 'done' ? 'выполнено ' + dateLabel(x.done_at.slice(0, 10)) : (late ? 'просрочено, срок был ' : 'до ') + dateLabel(x.due)) + (x.by_name ? ' · от ' + x.by_name : '')),
+        x.comment ? h('small', { class: 'tk-c' }, '💬 ' + x.comment) : null),
+      btns.length ? h('span', { class: 'acts' }, ...btns) : null);
+  }) : [h('li', { class: 'none' }, S.taskFilter === 'mine' ? 'У вас нет открытых поручений 👌' : 'Здесь пока пусто.')]));
+}
+function taskForm() {
+  const to = h('select', { id: 't-to' }, h('option', { value: '' }, '— выберите —'), ...S.people.map((u) => h('option', { value: u.id }, u.name + ' · ' + (ROLE_NAMES[u.role] || u.role))));
+  const due = new Date(Date.now() + 3 * 864e5);
+  dialog({ title: 'Новое поручение', ok: 'Поставить', body: [
+    h('label', { class: 'fld wide' }, h('span', null, 'Что сделать ', h('b', null, '*')), h('textarea', { id: 't-text', maxlength: 300, rows: 3 })),
+    h('label', { class: 'fld' }, h('span', null, 'Исполнитель ', h('b', null, '*')), to),
+    h('label', { class: 'fld' }, h('span', null, 'Срок ', h('b', null, '*')), h('input', { id: 't-due', type: 'date', value: due.toISOString().slice(0, 10) })),
+    h('p', null, 'Исполнителю сразу придёт сообщение с кнопкой «Готово», накануне и в день срока — напоминание.')],
+  submit: async () => {
+    if (!to.value) throw new Error('Выберите исполнителя');
+    S.tasks = (await api('taskAdd', { to: to.value, text: $('#t-text').value, due: $('#t-due').value })).tasks;
+    S.taskFilter = 'open'; renderTasks(); toast('Поручение отправлено');
+  } });
+}
+$('#task-add').addEventListener('click', taskForm);
+
+function ratePeriod() {
+  const d = new Date(), cur = monthKey(d), prev = monthKey(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  return S.ratePeriod === 'month' ? (x) => x.slice(0, 7) === cur : S.ratePeriod === 'prev' ? (x) => x.slice(0, 7) === prev : () => true;
+}
+function renderRating() {
+  const P = [['month', 'Этот месяц'], ['prev', 'Прошлый'], ['all', 'Весь сезон']];
+  $('#rate-chips').replaceChildren(...P.map(([k, l]) => h('button', { type: 'button', class: 'chip' + (S.ratePeriod === k ? ' on' : ''), onclick: () => { S.ratePeriod = k; renderRating(); } }, l)));
+  const inP = ratePeriod(), M = {};
+  const get = (id, name) => { const k = id || 'n:' + name; return M[k] || (M[k] = { name, reports: 0, people: 0, done: 0, onTime: 0 }); };
+  for (const r of S.reports) {
+    if (!inP(r.date) || !r.author_name) continue;
+    const p = get(r.author, r.author_name);
+    p.reports++; p.people += (r.values.new_members || 0) + (r.values.new_people || 0);
+  }
+  for (const x of S.tasks) {
+    if (x.status !== 'done' || !x.done_at || !inP(x.done_at)) continue;
+    const p = get(x.to, x.to_name);
+    p.done++; if (x.done_at.slice(0, 10) <= x.due) p.onTime++;
+  }
+  const rows = Object.values(M).map((p) => Object.assign(p, { pts: p.reports * 2 + p.people + p.onTime * 3 + (p.done - p.onTime) })).sort((a, b) => b.pts - a.pts || a.name.localeCompare(b.name));
+  const medal = ['🥇', '🥈', '🥉'];
+  $('#rate-body').replaceChildren(...(rows.length ? rows.map((p, i) => h('tr', { class: p.name === S.me.name ? 'cur' : '' },
+    h('td', null, medal[i] || String(i + 1)), h('td', null, p.name), h('td', { class: 'num' }, fmt(p.reports)), h('td', { class: 'num' }, fmt(p.people)),
+    h('td', { class: 'num' }, p.done ? `${p.onTime} / ${p.done}` : '—'), h('td', { class: 'num' }, h('b', null, fmt(p.pts)))))
+    : [h('tr', null, h('td', { colspan: 6, class: 'empty-val' }, 'За этот период активности пока нет.'))]));
+}
+
+function summaryDialog() {
+  const months = S.plan.map((p) => p.month).filter((m) => m <= monthKey()).reverse();
+  const sel = h('select', { id: 'sum-month' }, ...(months.length ? months : [monthKey()]).map((m) => h('option', { value: m }, monthLabel(m))));
+  const pre = h('pre', { class: 'sum-text wide' }, 'Загрузка…');
+  const load = async () => { pre.textContent = 'Загрузка…'; try { pre.textContent = (await api('summary', { month: sel.value })).text; } catch (e) { pre.textContent = e.message; } };
+  sel.onchange = load;
+  dialog({ title: 'Сводка за месяц', ok: 'Скопировать текст', body: [h('label', { class: 'fld wide' }, h('span', null, 'Месяц'), sel), pre,
+    h('p', null, 'Готовый текст для руководства. 1-го числа бот сам присылает сводку за прошлый месяц администратору и заму.')],
+  submit: async () => {
+    try { await navigator.clipboard.writeText(pre.textContent); toast('Текст скопирован'); }
+    catch { throw new Error('Не получилось скопировать — выделите текст и скопируйте вручную'); }
+  } });
+  load();
+}
+$('#sum-btn').addEventListener('click', summaryDialog);
 
 // ---------- доступ (администратор) ----------
 const ROLE_ALL = Object.assign({}, ROLE_NAMES, { pending: 'Ждёт подтверждения', blocked: 'Доступ закрыт' });
@@ -659,8 +993,9 @@ async function renderUsers() {
 
 // ---------- диалог ----------
 let dlgSubmit = null;
-function dialog({ title, body, ok, danger, submit }) {
+function dialog({ title, body, ok, danger, submit, info }) {
   const d = $('#dlg');
+  $('#dlg-cancel').hidden = !!info;
   $('#dlg-title').textContent = title;
   $('#dlg-body').replaceChildren(...body);
   $('#dlg-ok').textContent = ok || 'Сохранить';

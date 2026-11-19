@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Молодёжка ЛДПР Омск</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.svg">
-<link rel="stylesheet" href="app.css?v=8">
+<link rel="stylesheet" href="app.css?v=10">
 </head>
 <body>
 <div class="bg" aria-hidden="true"></div>
@@ -37,17 +37,17 @@
   </nav>
 
   <main class="main">
-    <header class="top glass">
-      <div>
-        <p class="eyebrow">Молодёжка ЛДПР · Омская область</p>
-        <h1 class="title">Дорожная карта 2026–2027</h1>
-      </div>
-      <div class="now">
-        <div class="now-box">
-          <p class="now-m">Сейчас: <b id="now-month">—</b> · <span id="now-stage">—</span></p>
-          <div class="track" id="now-track"></div>
+    <header class="top">
+      <div class="top-row">
+        <div>
+          <p class="eyebrow">Молодёжка ЛДПР, Омская область</p>
+          <h1 class="title">Дорожная карта 2026–2027</h1>
         </div>
-        <div class="me"><span class="avatar" id="me-avatar">?</span><span class="me-txt"><b id="me-name">—</b><small id="me-role">—</small></span></div>
+        <div class="me"><span class="me-txt"><b id="me-name">—</b><small id="me-role">—</small></span><span class="avatar" id="me-avatar">?</span></div>
+      </div>
+      <div class="now-box">
+        <p class="now-m">Сейчас <b id="now-month">—</b>, этап «<span id="now-stage">—</span>»</p>
+        <div class="track" id="now-track" aria-hidden="true"></div>
       </div>
     </header>
 
@@ -58,7 +58,7 @@
       <div class="card glass" id="ov-lights" hidden></div>
       <div class="card glass" id="ov-next" hidden></div>
       <div class="card glass">
-        <div class="card-h"><h3 class="h3">Последние отчёты</h3><a class="link" href="#reports">Все отчёты →</a></div>
+        <div class="card-h"><h3 class="h3">Последние отчёты</h3><a class="link" href="#reports">Все отчёты</a></div>
         <ul class="feed" id="ov-feed"></ul>
       </div>
     </section>
@@ -171,7 +171,7 @@
 
 <div class="toast" id="toast" role="status" hidden></div>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="config.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="config.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

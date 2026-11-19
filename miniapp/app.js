@@ -125,8 +125,16 @@ function computeProgress() {
 
 // ---------- старт ----------
 function applyReports(reports) { S.reports = reports; computeProgress(); renderHeader(); renderView(); }
+// светлая или тёмная тема — как в Telegram у пользователя
+function applyTheme() {
+  const dark = TG && TG.colorScheme ? TG.colorScheme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const bg = dark ? '#0b1230' : '#f2f4f9';
+  try { TG.setHeaderColor(bg); TG.setBackgroundColor(bg); } catch { /* старые версии Telegram */ }
+}
 async function boot() {
-  if (TG) { TG.ready(); TG.expand(); try { TG.setHeaderColor('#0f1733'); TG.setBackgroundColor('#0f1733'); } catch { /* старые версии Telegram */ } }
+  applyTheme();
+  if (TG) { TG.ready(); TG.expand(); try { TG.onEvent('themeChanged', applyTheme); } catch { /* старые версии Telegram */ } }
   if (!TG || !TG.initData) return gate('Откройте через Telegram', 'Это мини-приложение молодёжки ЛДПР. Откройте его кнопкой «Дашборд» в боте.');
   if (!window.CONFIG || !/^https:\/\//.test(window.CONFIG.API_URL)) return gate('Не настроено', 'В файле config.js не указан адрес Google Apps Script.');
   try {
@@ -184,7 +192,8 @@ window.addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(()
 function renderHeader() {
   const n = S.now;
   $('#now-month').textContent = n.month_label; $('#now-stage').textContent = n.stage;
-  $('#now-track').replaceChildren(...Array.from({ length: n.count }, (_, i) => h('i', { class: i + 1 < n.pos ? 'done' : i + 1 === n.pos ? 'cur' : '' })));
+  const tr = $('#now-track'); tr.style.setProperty('--n', n.count);
+  tr.replaceChildren(...S.progress.map((r, i) => h('i', { class: i + 1 < n.pos ? 'done' : i + 1 === n.pos ? 'cur' : '', title: r.month_label }, MON[+r.month.slice(5, 7) - 1])));
 }
 
 // ---------- блоки ----------
@@ -210,12 +219,18 @@ function renderOverview() {
   const lead = $('#ov-lead'); lead.replaceChildren();
   if (n.members_fact === null) lead.append('Этап «', h('b', null, n.stage), '»: нужно ', h('b', null, range(n.members_min, n.members_max)), ' активных членов и ', h('b', null, fmt(n.vk_plan)), ' подписчиков ВК. Факт за месяц ещё не внесён.');
   else lead.append('Этап «', h('b', null, n.stage), '»: в активе ', h('b', null, fmt(n.members_fact)), ' человек при плане ', h('b', null, range(n.members_min, n.members_max)), ' (', h('b', null, n.members_pct + '%'), ' от минимума).');
-  const tile = (href, ic, tone, label, big, fact) => h('a', { class: 'tile glass lift', href }, icon(ic, tone), h('span', { class: 'label' }, label), h('span', { class: 'big' }, big), h('span', { class: 'factline' }, 'Факт: ', ...fact), h('span', { class: 'more' }, 'Подробнее →'));
+  const pctOf = (f, p) => (f === null || !p ? null : Math.round((f / p) * 100));
+  // факт — крупно; под ним план, процент от минимума плана и полоска выполнения
+  const tile = (href, ic, tone, label, fact, plan, pct) => h('a', { class: 'tile glass', href },
+    h('span', { class: 'tile-h' }, icon(ic, tone), h('span', { class: 'label' }, label)),
+    h('span', { class: 'big' + (fact === null ? ' empty' : '') }, fact === null ? 'факт не внесён' : fmt(fact)),
+    h('span', { class: 'factline' }, plan, pctPill(pct)),
+    pct === null ? null : h('span', { class: 'meter' }, h('i', { class: pct >= 100 ? 'good' : '', style: `width:${Math.min(100, pct)}%` })));
   $('#ov-tiles').replaceChildren(
-    tile('#members', 'members', 'gold', 'Активные члены', range(n.members_min, n.members_max), [factSpan(n.members_fact), pctPill(n.members_pct)]),
-    tile('#social', 'vk', 'sky', 'Подписчики ВК', fmt(n.vk_plan), [factSpan(n.vk_fact), pctPill(n.vk_pct)]),
-    tile('#events', 'events', 'lilac', 'Мероприятия', n.events_plan === null ? 'агитация' : String(n.events_plan), [factSpan(n.events_fact)]),
-    tile('#social', 'posts', 'ok', 'Постов в месяц', range(n.posts_min, n.posts_max), [factSpan(n.posts_fact)])
+    tile('#members', 'members', 'gold', 'Активные члены', n.members_fact, 'план ' + range(n.members_min, n.members_max), n.members_pct),
+    tile('#social', 'vk', 'sky', 'Подписчики ВК', n.vk_fact, 'план ' + fmt(n.vk_plan), n.vk_pct),
+    tile('#events', 'events', 'lilac', 'Мероприятия', n.events_fact, n.events_plan === null ? 'месяц агитации' : 'план ' + n.events_plan, pctOf(n.events_fact, n.events_plan)),
+    tile('#social', 'posts', 'ok', 'Посты за месяц', n.posts_fact, 'план ' + range(n.posts_min, n.posts_max), pctOf(n.posts_fact, n.posts_min))
   );
   const recent = [...S.reports].sort((a, b) => (b.date + b.created).localeCompare(a.date + a.created)).slice(0, 6);
   $('#ov-feed').replaceChildren(...(recent.length ? recent.map((r) => h('li', { class: 'd-' + r.dept },
@@ -269,7 +284,7 @@ function frame(el, ymax, label) {
   const x = (i) => (rows.length < 2 ? (x0 + x1) / 2 : x0 + (i * (x1 - x0)) / (rows.length - 1));
   const y = (v) => H - m.b - (v / top) * (H - m.t - m.b);
   for (const v of ticks) {
-    svg.append(s('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'rgba(255,255,255,.07)' }));
+    svg.append(s('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
     const t = s('text', { x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }); t.textContent = nf.format(v); svg.append(t);
   }
   const every = W < 440 ? 2 : 1;
@@ -278,15 +293,15 @@ function frame(el, ymax, label) {
     const t = s('text', { x: x(i), y: H - 8, 'text-anchor': 'middle', class: 'tick' }); t.textContent = MON[+r.month.slice(5, 7) - 1]; svg.append(t);
   });
   const ni = S.now.pos - 1;
-  svg.append(s('line', { x1: x(ni), x2: x(ni), y1: m.t - 8, y2: H - m.b, stroke: '#f8d561', 'stroke-opacity': .45, 'stroke-width': 2, 'stroke-dasharray': '4 4' }));
+  svg.append(s('line', { x1: x(ni), x2: x(ni), y1: m.t - 8, y2: H - m.b, stroke: 'var(--now)', 'stroke-opacity': .8, 'stroke-width': 2, 'stroke-dasharray': '4 4' }));
   return { svg, rows, x, y, W, H, m };
 }
 function path(pts) { return pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(''); }
 function factLine(f, key) {
   const pts = f.rows.map((r, i) => [i, r[key]]).filter((p) => p[1] !== null);
   if (!pts.length) return;
-  f.svg.append(s('path', { d: path(pts.map(([i, v]) => [f.x(i), f.y(v)])), fill: 'none', stroke: '#f8d561', 'stroke-width': 3, 'stroke-linejoin': 'round' }));
-  for (const [i, v] of pts) f.svg.append(s('circle', { cx: f.x(i), cy: f.y(v), r: 4.5, fill: '#f8d561', stroke: '#0f1733', 'stroke-width': 2 }));
+  f.svg.append(s('path', { d: path(pts.map(([i, v]) => [f.x(i), f.y(v)])), fill: 'none', stroke: 'var(--fact)', 'stroke-width': 3, 'stroke-linejoin': 'round' }));
+  for (const [i, v] of pts) f.svg.append(s('circle', { cx: f.x(i), cy: f.y(v), r: 4.5, fill: 'var(--fact)', stroke: 'var(--surface)', 'stroke-width': 2 }));
 }
 function label(f, xv, yv, text, cls, anchor) {
   const t = s('text', { x: xv, y: yv, 'text-anchor': anchor || 'middle', class: 'lbl ' + (cls || '') }); t.textContent = text; f.svg.append(t);
@@ -294,7 +309,7 @@ function label(f, xv, yv, text, cls, anchor) {
 function hover(f, el, lines) {
   const tip = h('div', { class: 'tip', hidden: true }); el.append(tip);
   const bw = f.rows.length > 1 ? f.x(1) - f.x(0) : 40;
-  const hl = s('rect', { y: f.m.t - 8, height: f.H - f.m.t - f.m.b + 8, width: bw, fill: 'rgba(132,180,245,.08)', opacity: 0 });
+  const hl = s('rect', { y: f.m.t - 8, height: f.H - f.m.t - f.m.b + 8, width: bw, fill: 'var(--hover)', opacity: 0 });
   f.svg.insertBefore(hl, f.svg.firstChild);
   f.rows.forEach((r, i) => {
     const zone = s('rect', { x: f.x(i) - bw / 2, y: 0, width: bw, height: f.H, fill: 'transparent' });
@@ -316,7 +331,7 @@ function chartMembers(el) {
   const rows = S.progress;
   const f = frame(el, Math.max(...rows.map((r) => Math.max(r.members_max, r.members_fact || 0))) * 1.1, 'Активные члены: коридор плана и факт по месяцам');
   const up = rows.map((r, i) => [f.x(i), f.y(r.members_max)]), lo = rows.map((r, i) => [f.x(i), f.y(r.members_min)]).reverse();
-  f.svg.append(s('path', { d: path(up.concat(lo)) + 'Z', fill: 'rgba(132,180,245,.26)', stroke: '#84b4f5', 'stroke-width': 1 }));
+  f.svg.append(s('path', { d: path(up.concat(lo)) + 'Z', fill: 'var(--plan-fill)', stroke: 'var(--plan)', 'stroke-width': 1 }));
   rows.forEach((r, i) => { if (f.W >= 520 || i % 2 === 0 || i === rows.length - 1) label(f, f.x(i), f.y(r.members_max) - 7, `${r.members_min}–${r.members_max}`); });
   factLine(f, 'members_fact');
   hover(f, el, (r) => [['План', `${r.members_min}–${r.members_max}`], ['Факт', nz(r.members_fact, 'не внесён')], ['Новых', nz(r.new_members, '—')], ['Этап', r.stage]]);
@@ -325,9 +340,9 @@ function chartVk(el) {
   const rows = S.progress;
   const f = frame(el, Math.max(...rows.map((r) => Math.max(r.vk_plan, r.vk_fact || 0))) * 1.1, 'Подписчики ВК: план и факт по месяцам');
   const pts = rows.map((r, i) => [f.x(i), f.y(r.vk_plan)]);
-  f.svg.append(s('path', { d: path(pts) + `L${pts[pts.length - 1][0]},${f.y(0)}L${pts[0][0]},${f.y(0)}Z`, fill: 'rgba(132,180,245,.12)' }));
-  f.svg.append(s('path', { d: path(pts), fill: 'none', stroke: '#84b4f5', 'stroke-width': 2.5 }));
-  pts.forEach((p) => f.svg.append(s('circle', { cx: p[0], cy: p[1], r: 3, fill: '#84b4f5' })));
+  f.svg.append(s('path', { d: path(pts) + `L${pts[pts.length - 1][0]},${f.y(0)}L${pts[0][0]},${f.y(0)}Z`, fill: 'var(--plan-soft)' }));
+  f.svg.append(s('path', { d: path(pts), fill: 'none', stroke: 'var(--plan)', 'stroke-width': 2.5 }));
+  pts.forEach((p) => f.svg.append(s('circle', { cx: p[0], cy: p[1], r: 3, fill: 'var(--plan)' })));
   label(f, pts[0][0], pts[0][1] - 9, fmt(rows[0].vk_plan), 'hi', 'start');
   label(f, pts[pts.length - 1][0], pts[pts.length - 1][1] - 9, fmt(rows[rows.length - 1].vk_plan), 'hi', 'end');
   factLine(f, 'vk_fact');
@@ -340,12 +355,12 @@ function chartEvents(el) {
   rows.forEach((r, i) => {
     const cx = f.x(i);
     if (r.events_plan === null) {
-      const t = s('text', { transform: `translate(${cx + 4},${f.y(0) - 6}) rotate(-90)`, class: 'lbl' }); t.textContent = 'агитация'; t.setAttribute('fill', '#ff8b7b'); f.svg.append(t);
+      const t = s('text', { transform: `translate(${cx + 4},${f.y(0) - 6}) rotate(-90)`, class: 'lbl' }); t.textContent = 'агитация'; t.setAttribute('fill', 'var(--bad)'); f.svg.append(t);
     } else {
-      f.svg.append(s('rect', { x: cx - bw / 2, width: bw, y: f.y(r.events_plan), height: f.y(0) - f.y(r.events_plan), rx: 3, fill: 'rgba(132,180,245,.3)', stroke: '#84b4f5' }));
+      f.svg.append(s('rect', { x: cx - bw / 2, width: bw, y: f.y(r.events_plan), height: f.y(0) - f.y(r.events_plan), rx: 3, fill: 'var(--plan-fill)', stroke: 'var(--plan)' }));
       label(f, cx, f.y(Math.max(r.events_plan, r.events_fact || 0)) - 6, String(r.events_plan), 'hi');
     }
-    if (r.events_fact !== null && r.events_fact > 0) f.svg.append(s('rect', { x: cx - bw / 4, width: bw / 2, y: f.y(r.events_fact), height: f.y(0) - f.y(r.events_fact), rx: 2, fill: '#f8d561' }));
+    if (r.events_fact !== null && r.events_fact > 0) f.svg.append(s('rect', { x: cx - bw / 4, width: bw / 2, y: f.y(r.events_fact), height: f.y(0) - f.y(r.events_fact), rx: 2, fill: 'var(--fact)' }));
   });
   hover(f, el, (r) => [['План', r.events_plan === null ? 'агитация' : String(r.events_plan)], ['Факт', nz(r.events_fact, 'не внесён')], ['Что', r.events_text]]);
 }
@@ -356,11 +371,11 @@ function chartContent(el) {
   rows.forEach((r, i) => {
     const cx = f.x(i);
     if (r.posts_max !== null) {
-      f.svg.append(s('rect', { x: cx - bw - 1, width: bw, y: f.y(r.posts_max), height: f.y(0) - f.y(r.posts_max), rx: 2, fill: 'rgba(132,180,245,.22)', stroke: '#84b4f5' }));
-      if (r.posts_min !== r.posts_max) f.svg.append(s('line', { x1: cx - bw - 1, x2: cx - 1, y1: f.y(r.posts_min), y2: f.y(r.posts_min), stroke: '#84b4f5', 'stroke-width': 2 }));
+      f.svg.append(s('rect', { x: cx - bw - 1, width: bw, y: f.y(r.posts_max), height: f.y(0) - f.y(r.posts_max), rx: 2, fill: 'var(--plan-fill)', stroke: 'var(--plan)' }));
+      if (r.posts_min !== r.posts_max) f.svg.append(s('line', { x1: cx - bw - 1, x2: cx - 1, y1: f.y(r.posts_min), y2: f.y(r.posts_min), stroke: 'var(--plan)', 'stroke-width': 2 }));
     }
-    if (r.reels_max !== null) f.svg.append(s('rect', { x: cx + 1, width: bw, y: f.y(r.reels_max), height: f.y(0) - f.y(r.reels_max), rx: 2, fill: '#aebfe3', 'fill-opacity': .75 }));
-    if (r.posts_fact !== null) f.svg.append(s('line', { x1: cx - bw - 4, x2: cx + bw + 4, y1: f.y(r.posts_fact), y2: f.y(r.posts_fact), stroke: '#f8d561', 'stroke-width': 3 }));
+    if (r.reels_max !== null) f.svg.append(s('rect', { x: cx + 1, width: bw, y: f.y(r.reels_max), height: f.y(0) - f.y(r.reels_max), rx: 2, fill: 'var(--reels)', 'fill-opacity': .75 }));
+    if (r.posts_fact !== null) f.svg.append(s('line', { x1: cx - bw - 4, x2: cx + bw + 4, y1: f.y(r.posts_fact), y2: f.y(r.posts_fact), stroke: 'var(--fact)', 'stroke-width': 3 }));
   });
   hover(f, el, (r) => [['Посты', range(r.posts_min, r.posts_max)], ['Reels', r.reels_min === null ? 'без нормы' : range(r.reels_min, r.reels_max)], ['Факт: посты', nz(r.posts_fact, 'не внесён')], ['Факт: Reels', nz(r.reels_fact, '—')]]);
 }
@@ -411,7 +426,7 @@ function chartDays(el, days) {
   svg.style.height = H + 'px';
   el.append(svg);
   [y0, Math.round((y0 + y1) / 2), y1].forEach((v) => {
-    svg.append(s('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'rgba(255,255,255,.07)' }));
+    svg.append(s('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: 'var(--grid)' }));
     const t = s('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'tick' }); t.textContent = nf.format(v); svg.append(t);
   });
   const stepL = Math.ceil(days.length / (W < 440 ? 4 : 7));
@@ -422,10 +437,10 @@ function chartDays(el, days) {
     t.textContent = dateLabel(d.d); svg.append(t);
   });
   const pts = days.map((d, i) => [x(i), y(d.n)]);
-  svg.append(s('path', { d: path(pts) + `L${pts[pts.length - 1][0]},${H - m.b}L${pts[0][0]},${H - m.b}Z`, fill: 'rgba(248,213,97,.12)' }));
-  svg.append(s('path', { d: path(pts), fill: 'none', stroke: '#f8d561', 'stroke-width': 2.5, 'stroke-linejoin': 'round' }));
+  svg.append(s('path', { d: path(pts) + `L${pts[pts.length - 1][0]},${H - m.b}L${pts[0][0]},${H - m.b}Z`, fill: 'var(--fact-soft)' }));
+  svg.append(s('path', { d: path(pts), fill: 'none', stroke: 'var(--fact)', 'stroke-width': 2.5, 'stroke-linejoin': 'round' }));
   const lp = pts[pts.length - 1];
-  svg.append(s('circle', { cx: lp[0], cy: lp[1], r: 4.5, fill: '#f8d561', stroke: '#0f1733', 'stroke-width': 2 }));
+  svg.append(s('circle', { cx: lp[0], cy: lp[1], r: 4.5, fill: 'var(--fact)', stroke: 'var(--surface)', 'stroke-width': 2 }));
   const tip = h('div', { class: 'tip', hidden: true }); el.append(tip);
   const bw = (W - m.l - m.r) / (days.length - 1);
   days.forEach((d, i) => {

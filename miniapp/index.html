@@ -6,7 +6,7 @@
 <title>Молодёжка ЛДПР Омск</title>
 <meta name="robots" content="noindex">
 <link rel="icon" href="logo.svg">
-<link rel="stylesheet" href="app.css?v=6">
+<link rel="stylesheet" href="app.css?v=8">
 </head>
 <body>
 <div class="bg" aria-hidden="true"></div>
@@ -119,8 +119,10 @@
     </section>
 
     <section class="view" data-view="team" hidden>
-      <div class="vhead"><h2 class="vtitle">Команда</h2><div class="acts"><button type="button" class="btn" id="sum-btn">Сводка за месяц</button><button type="button" class="btn primary" id="task-add" hidden>+ Поручение</button></div></div>
+      <div class="vhead"><h2 class="vtitle">Команда</h2><div class="acts"><button type="button" class="btn" id="sum-btn">Сводка за месяц</button><button type="button" class="btn" id="export-btn" hidden>📤 Выгрузка</button><button type="button" class="btn" id="roadmap-btn" hidden>🗺 План → поручения</button><button type="button" class="btn primary" id="task-add" hidden>+ Поручение</button></div></div>
       <div class="card glass" id="team-chat" hidden></div>
+      <div class="card glass" id="me-card" hidden></div>
+      <div class="card glass" id="week-card" hidden></div>
       <div class="card glass">
         <div class="card-h"><h3 class="h3">Поручения</h3><div class="chips" id="task-chips" role="group" aria-label="Фильтр поручений"></div></div>
         <ul class="tasks" id="task-list"></ul>
@@ -169,7 +171,7 @@
 
 <div class="toast" id="toast" role="status" hidden></div>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="config.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="config.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

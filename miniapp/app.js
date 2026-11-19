@@ -132,7 +132,7 @@ async function boot() {
   try {
     const [plan, st] = await Promise.all([fetch('plan.json').then((r) => r.json()), api('state')]);
     S.plan = plan; S.me = st.user; S.depts = st.depts; S.reports = st.reports; S.vk = st.vk || null; S.people = st.people || []; S.social = st.social || [];
-    S.tasks = st.tasks || []; S.cal = st.plan || []; S.team = st.team || null;
+    S.tasks = st.tasks || []; S.cal = st.plan || []; S.team = st.team || null; S.week = st.week || null; S.goals = st.goals || [];
   } catch (e) { return gate('Нет доступа', e.message, true); }
   if (DEPT_ORDER.includes(S.me.role)) S.repDept = S.me.role;
   { const d = new Date(); S.repMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
@@ -872,13 +872,32 @@ function planDelete(e) {
 // ---------- команда: поручения, рейтинг, сводка ----------
 function renderTeam() {
   $('#task-add').hidden = !anyDept();
+  $('#export-btn').hidden = !anyDept();
+  $('#roadmap-btn').hidden = !anyDept();
+  renderMe();
   const chat = $('#team-chat');
   chat.hidden = !S.team;
   if (S.team) chat.replaceChildren(h('p', { class: 'hint flush' }, S.team.chat
     ? h('span', null, '💬 Общий чат подключён' + (S.team.title ? ': «' + S.team.title + '»' : '') + '. Туда приходят новые отчёты, план мероприятий, напоминания накануне, итоги недели по ВК и сводка за месяц.')
     : h('span', null, '💬 Общий чат не подключён. Добавьте бота в групповой чат команды и отправьте там команду /bind — бот начнёт присылать туда новые отчёты, анонсы и сводки.')));
+  renderWeek();
   renderTasks();
   renderRating();
+}
+// недельная отчётность: срок — пятница 17:00 по Омску
+function renderWeek() {
+  const box = $('#week-card'), w = S.week;
+  box.hidden = !w || !w.leaders.length;
+  if (box.hidden) return;
+  const dl = new Date(w.deadline.slice(0, 10) + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' });
+  const done = w.leaders.filter((l) => l.count).length;
+  box.replaceChildren(
+    h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, 'Отчётность за неделю'), h('span', { class: 'pill ' + (done === w.leaders.length ? 'good' : '') }, `сдали ${done} из ${w.leaders.length}`)),
+    h('p', { class: 'hint flush' }, `Срок — ${dl}, 17:00 по Омску. Бот напоминает в четверг в 17:00 и в пятницу утром тем, кто ещё не сдал.`),
+    h('ul', { class: 'week' }, ...w.leaders.map((l) => h('li', { class: l.count ? 'ok' : 'miss' },
+      h('span', { class: 'wk-mark', 'aria-hidden': 'true' }, l.count ? '✓' : '•'),
+      h('span', null, h('b', null, l.dept_name), h('small', null, l.name)),
+      h('span', { class: 'wk-st' }, l.count ? `отчётов: ${l.count}` : 'ещё нет')))));
 }
 function renderTasks() {
   const t = today();
@@ -965,6 +984,109 @@ function summaryDialog() {
   load();
 }
 $('#sum-btn').addEventListener('click', summaryDialog);
+$('#export-btn').addEventListener('click', exportDialog);
+$('#roadmap-btn').addEventListener('click', roadmapDialog);
+
+// ---------- личные показатели и цели ----------
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const shift = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return isoDay(d); };
+function metricVals(dept, from, to) {
+  const reps = S.reports.filter((r) => r.dept === dept && r.date >= from && r.date <= to)
+    .sort((a, b) => (a.date + a.created).localeCompare(b.date + b.created));
+  const out = {};
+  for (const [k, , how] of S.depts[dept].metrics) {
+    if (how === 'count') out[k] = reps.length;
+    else if (how === 'sum') out[k] = reps.reduce((t, r) => t + (r.values[k] || 0), 0);
+    else { let v = null; for (const r of reps) if (r.values[k] !== undefined) v = r.values[k]; out[k] = v; }
+  }
+  return out;
+}
+function leaders() { return S.people.length ? S.people.filter((u) => DEPT_ORDER.includes(u.role)) : (DEPT_ORDER.includes(S.me.role) ? [S.me] : []); }
+function renderMe() {
+  const box = $('#me-card');
+  const list = DEPT_ORDER.includes(S.me.role) ? [S.me] : anyDept() ? leaders() : [];
+  box.hidden = !list.length;
+  if (!list.length) return;
+  if (!S.meUser || !list.some((u) => u.id === S.meUser)) S.meUser = list[0].id;
+  const u = list.find((x) => x.id === S.meUser), dept = u.role;
+  const t = today(), month = t.slice(0, 7), day = +t.slice(8, 10);
+  const pmEnd = shift(month + '-01', -1), pm = pmEnd.slice(0, 7), pmDay = Math.min(day, +pmEnd.slice(8, 10));
+  const w1 = metricVals(dept, shift(t, -6), t), w0 = metricVals(dept, shift(t, -13), shift(t, -7));
+  const m1 = metricVals(dept, month + '-01', t), m0 = metricVals(dept, pm + '-01', pm + '-' + String(pmDay).padStart(2, '0'));
+  const goals = (S.goals || []).filter((g) => g.user === u.id && g.month === month);
+  const delta = (c, p, how) => {
+    if (c === null || p === null || how === 'last') return null;
+    const d = c - p;
+    return h('span', { class: 'delta ' + (d > 0 ? 'up' : d < 0 ? 'down' : '') }, (d > 0 ? '+' : d < 0 ? '−' : '±') + fmt(Math.abs(d)));
+  };
+  const rows = S.depts[dept].metrics.map(([k, label, how]) => {
+    const g = goals.find((x) => x.k === k);
+    const pct = g ? Math.round(((m1[k] || 0) / g.v) * 100) : null;
+    return h('tr', null, h('td', null, label),
+      h('td', { class: 'num' }, fmt(w1[k]), ' ', delta(w1[k], w0[k], how)),
+      h('td', { class: 'num' }, fmt(m1[k]), ' ', delta(m1[k], m0[k], how)),
+      h('td', null, g ? h('span', { class: 'goal' }, h('span', { class: 'gbar' }, h('i', { style: `width:${Math.min(100, pct)}%`, class: pct >= 100 ? 'done' : '' })), `${fmt(m1[k] || 0)} из ${fmt(g.v)}`) : h('span', { class: 'empty-val' }, '—')));
+  });
+  const my = S.tasks.filter((x) => x.to === u.id);
+  const open = my.filter((x) => x.status === 'open'), late = open.filter((x) => x.due < t);
+  const doneM = my.filter((x) => x.status === 'done' && x.done_at.slice(0, 7) === month);
+  const onTime = doneM.filter((x) => x.done_at.slice(0, 10) <= x.due).length;
+  const wk = S.week && S.week.leaders.find((l) => l.id === u.id);
+  box.replaceChildren(
+    h('div', { class: 'card-h' }, h('h3', { class: 'h3' }, list.length > 1 ? 'Показатели руководителей' : 'Мои показатели'),
+      anyDept() ? h('button', { type: 'button', class: 'btn small', onclick: () => goalForm(u) }, '🎯 Цели на месяц') : null),
+    list.length > 1 ? h('div', { class: 'chips' }, ...list.map((x) => h('button', { type: 'button', class: 'chip d-' + x.role + (x.id === u.id ? ' on' : ''), onclick: () => { S.meUser = x.id; renderMe(); } },
+      h('i', { class: 'dot' }), x.name))) : null,
+    h('p', { class: 'hint flush' }, `${u.name} · ${S.depts[dept].name}. Рядом с числом — разница с прошлыми 7 днями и с 1–${pmDay} ${MON[+pm.slice(5, 7) - 1]}.`),
+    h('div', { class: 'tablewrap' }, h('table', { class: 'table metrics' },
+      h('thead', null, h('tr', null, h('th', null, 'Показатель'), h('th', { class: 'num' }, '7 дней'), h('th', { class: 'num' }, 'С начала месяца'), h('th', null, 'Цель на месяц'))),
+      h('tbody', null, ...rows))),
+    h('div', { class: 'mini' },
+      stat('Поручений в работе', String(open.length) + (late.length ? ` · ${late.length} просроч.` : ''), late.length ? 'down' : ''),
+      stat('Выполнено в этом месяце', doneM.length ? `${doneM.length} (в срок ${onTime})` : '0'),
+      stat('Отчётность за неделю', wk ? (wk.count ? '✓ сдана' : 'ещё нет') : '—', wk && wk.count ? 'up' : wk ? 'down' : '')));
+}
+function goalForm(u) {
+  const month = today().slice(0, 7);
+  const cur = Object.fromEntries((S.goals || []).filter((g) => g.user === u.id && g.month === month).map((g) => [g.k, g.v]));
+  dialog({ title: 'Цели на ' + monthLabel(month).toLowerCase(), ok: 'Сохранить', body: [
+    h('p', null, `${u.name} · ${S.depts[u.role].name}. Пустое поле — без цели. Руководителю придёт сообщение с целями.`),
+    ...S.depts[u.role].metrics.map(([k, label]) => h('label', { class: 'fld' }, h('span', null, label),
+      h('input', { id: 'g-' + k, type: 'number', min: 0, step: 1, inputmode: 'numeric', value: cur[k] ?? '' })))],
+  submit: async () => {
+    const values = {};
+    for (const [k] of S.depts[u.role].metrics) { const x = $('#g-' + k).value.trim(); if (x !== '') values[k] = Number(x); }
+    S.goals = (await api('goalSet', { user: u.id, month, values })).goals;
+    renderMe(); toast('Цели сохранены');
+  } });
+}
+
+// ---------- выгрузка и дорожная карта ----------
+function exportDialog() {
+  const m = monthKey(), pm = monthKey(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+  const sel = h('select', { id: 'x-period' }, h('option', { value: m }, monthLabel(m)), h('option', { value: pm }, monthLabel(pm)), h('option', { value: 'season' }, 'Весь сезон'));
+  dialog({ title: 'Выгрузка в Excel и PDF', ok: 'Выгрузить', body: [
+    h('label', { class: 'fld wide' }, h('span', null, 'Период'), sel),
+    h('p', null, 'Бот пришлёт два файла в ваш чат с ним: Excel (план и факт по месяцам, все отчёты, поручения, мероприятия) и PDF для печати. Таблица также сохранится на Google Диске в папке «Молодёжка — выгрузки». Подготовка занимает до минуты.')],
+  submit: async () => {
+    $('#dlg-ok').textContent = 'Готовлю…';
+    await api('export', { period: sel.value });
+    toast('Готово — файлы в чате с ботом');
+  } });
+}
+function roadmapDialog() {
+  const m = monthKey(), nm = monthKey(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1));
+  const months = S.plan.map((p) => p.month).filter((x) => x === m || x === nm);
+  if (!months.length) return toast('В дорожной карте нет плана на этот месяц');
+  const sel = h('select', { id: 'r-month' }, ...months.map((x) => h('option', { value: x }, monthLabel(x))));
+  dialog({ title: 'Дорожная карта → поручения', ok: 'Создать поручения', body: [
+    h('label', { class: 'fld wide' }, h('span', null, 'Месяц'), sel),
+    h('p', null, 'Пункты плана месяца станут поручениями руководителям: «Набор актива» — Работе с людьми, «ВК и TikTok» — Медиа, «Мероприятия» — Мероприятиям. Срок — последний день месяца. Повторный запуск не создаёт дублей. 1-го числа бот делает это сам.')],
+  submit: async () => {
+    const r = await api('roadmapTasks', { month: sel.value });
+    S.tasks = r.tasks; S.taskFilter = 'open'; renderTeam(); toast(r.text.split('\n')[0]);
+  } });
+}
 
 // ---------- доступ (администратор) ----------
 const ROLE_ALL = Object.assign({}, ROLE_NAMES, { pending: 'Ждёт подтверждения', blocked: 'Доступ закрыт' });
